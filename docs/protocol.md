@@ -1,0 +1,151 @@
+# Workflow action protocol
+
+Humans use messages and CLI commands. Backend authors use this protocol. Built-in adapters include phase instructions and current workflow state in every prompt. Persistent CLI sessions receive the full public transcript on creation and missing public messages on subsequent turns. Stateless/full mode always receives the complete transcript.
+
+Every member receives the same shared responsibilities for independent analysis, discussion, implementation, and reciprocal review. There are no backend-specific default specialties or permanent writer/reviewer roles. The optional `role` configuration field adds a task-specific focus alongside these responsibilities; it never changes phase permissions, floor eligibility, or task ownership. An empty or omitted `role` adds no focus. Current phase and contribution authorship determine who can implement or judge.
+
+Execution permissions are separate from workflow authorization. The shipped configuration selects `interaction_mode = "chatroom"` and `permission_mode = "full_auto"`. Only an assigned implementation writer receives Codex `dangerFullAccess`; other Codex turns explicitly receive `readOnly`. Claude uses `auto` with `--permission-prompts none` and a registered `PreToolUse` control callback: only the implementation writer can use write/Bash tools, formal readers can use `Read/Glob/Grep`, and conversation-only turns cannot use tools. Returning an empty allowed hook result preserves native auto checks rather than pre-approving tools. Claude must confirm and retain `permissionMode: "auto"`; other modes fail closed. These controls coordinate cooperative members, not malicious full-access processes or external writers.
+
+Legacy `serial` mode retains per-invocation CLIs and full-access Codex even during non-writing phases, where non-writing is a workflow instruction. `phase_scoped` remains the fallback when the permission key is omitted: read-only/dontAsk for readers and workspace-write/acceptEdits for writers. Configuration fingerprints include interaction and permission modes; changing modes rebuilds private context, not public history.
+
+End formal work replies with one `<team-action>JSON</team-action>` block, after the public explanation. Plain discussion may omit it, and conversation-only turns must omit it. Interim commentary must not include action blocks. No text may follow the final block. Actions take effect only after a successfully completed invocation; transport `done` is not project completion.
+
+There are no round, text-length, task-count, or command-count budgets. Required types, nonempty fields, valid identifiers, real file paths, dependency order, and matching versions remain enforced.
+
+## Concurrent room scheduling
+
+In chatroom mode every configured member has a permanent worker, an independent private connection, and an event-driven inbox. Connections are started on first work and reused after successful turns. Each private conversation has at most one in-flight generation; different members can generate concurrently. Messages become public atomically on completion, without a global speaking lock. Human clients receive transient drafts immediately, keyed by `turn_id`; private reasoning and raw tool output are excluded.
+
+`turn.started` and `turn.finished` replace serial `floor.granted`/`floor.released` events. They include `speaker`, `turn_id`, workflow `phase`, `lane` (`work` or `chat`), and `context_through`. `turn.context` records the input prompt hash. `state.active_turns` lists all active invocations; `state.active` remains a representative entry for older clients. `state.writer` identifies the exclusive implementation/check runner. `state.runtimes` exposes per-member state, errors, process IDs, and pending-message counts.
+
+New public messages are retained for every worker. This implementation synchronizes busy members at their next input boundary, not by injecting into an in-flight generation. Own publications do not wake their author unless another public message or workflow change requires attention. `[[PASS]]` is neither a message nor a vote; quiescent workers report `waiting_messages` and wait without model polling.
+
+Formal work uses a generation fence: room revision, proposal version, phase, decision epoch, and checkpoint identity/revision. New proposals, objections, checkpoints, and requested repairs invalidate older formal decisions. Late concurrent actions are stored as `rejected_action` plus `rejection`; they never alter the workflow, and the member can synchronize and reconsider. Duplicate approvals do not generate feedback loops. Unanimous discussion remains in `discussion` until outstanding formal discussion completes, then a durable system message records the transition to implementation.
+
+Discussion and eligible formal reviews can run concurrently. Writers/checks wait for all formal readers, including stale readers, to finish. Only one writer/check runner holds the lease. Other members may use the conversation-only `chat` lane while work proceeds; its output cannot approve, judge, or modify anything. Informal observations of changing files are not stable-snapshot review evidence. Custom backends must implement their phase restrictions themselves; native nonwriters use the execution controls described above. Do not leave background writers running beyond a checkpoint.
+
+## Proposal and consensus
+
+```json
+{
+  "action": "propose",
+  "summary": "Goal, scope, approach, assumptions, and tradeoffs",
+  "acceptance": ["Observable outcome"],
+  "tasks": [
+    {"id":"T1","title":"Shared module","details":"Implement and judge the interface","depends_on":[]},
+    {"id":"T2","title":"Shared tests","details":"Cover the acceptance criteria","depends_on":["T1"]}
+  ],
+  "checks": [["python3","-m","unittest","discover","-s","tests"]]
+}
+```
+
+Tasks need unique IDs and complete, acyclic dependencies. Plans require at least one task, acceptance criterion, and meaningful executable command. Commands must be nonempty argument arrays, not shell strings. The optional legacy `owner` must name a configured member, but neither restricts who may implement nor controls floor scheduling.
+
+A proposal creates a new version and clears previous votes. The proposer must also explicitly approve on a later turn:
+
+```json
+{"action":"approve","version":1}
+{"action":"object","version":1,"reason":"Specific unresolved issue"}
+```
+
+An objection revokes existing approvals. Only explicit unanimous approval of the same version, without outstanding objections, starts implementation. Plain discussion may omit an action; `[[PASS]]` yields the turn without voting.
+
+## Shared implementation checkpoints
+
+During `implementation`, any member holding the floor can improve the current dependency-ready milestone, including files written by peers. No member owns an exclusive coding partition.
+
+```json
+{"action":"contribute","version":1,"task_id":"T1","ready":false,"summary":"Draft interface; please challenge the boundary handling","files":["module.py"],"tests":"Not run; draft only"}
+```
+
+Use `ready: false` for partial work and `ready: true` to request task acceptance. Omitted `ready` defaults to false for `contribute`. The legacy `task_done` action defaults to `ready: true`, but still only submits a checkpoint; it cannot bypass peer judgment.
+
+Report actual changes and actual test results honestly. `files` must list existing workspace-relative files, with no absolute paths, parent traversal, or escaping symlinks. The list may be empty for work that only inspects or runs checks. Describe intentional deletions in `summary`.
+
+The coordinator increments the task's `revision`, records the author and report in `contributions`, marks the task `judging`, and creates:
+
+```json
+{"task_id":"T1","revision":1,"author":"codex","ready":false,"approvals":[]}
+```
+
+This is the current `checkpoint`. Dependency tasks do not become available merely because their author claims completion.
+
+## Immediate peer judgment and revision
+
+In `judging`, every member other than the checkpoint author must inspect the actual implementation. This happens after each checkpoint, not only after the entire project has been written. Judgment turns are read-only.
+
+```json
+{"action":"judge_pass","version":1,"task_id":"T1","revision":1,"evidence":"Read module.py and checked the boundary cases; this draft is sound"}
+{"action":"judge_fail","version":1,"task_id":"T1","revision":1,"evidence":"module.py:12 drops zero; use an explicit None check and add a zero regression"}
+```
+
+Judgments must match both proposal version and checkpoint revision. Self-judgment, duplicate approval, stale votes, and votes about other tasks are rejected atomically.
+
+A rejection is saved in the contribution's judgment history and shared feedback. It reopens the task and downstream dependencies, revokes review approvals, and gives the critic the next implementation turn. The critic may demonstrate the fix; the original author then becomes an eligible judge of that revision. Humans can override the next writer with `/next agent`.
+
+After every peer accepts a checkpoint:
+
+- `ready: false`: the milestone returns to pending for further shared work.
+- `ready: true`: the milestone becomes done and releases downstream dependencies.
+- The next writer rotates from the checkpoint author, rather than granting ownership to a task assignee.
+
+Every revision must receive fresh judgments. Prior contributions and critiques remain in workflow state and the public conversation.
+
+## Integrated review and real verification
+
+Once all milestones are accepted, every member reviews the entire integrated result in a read-only `review` turn, including interactions with later changes:
+
+```json
+{"action":"review_pass","version":1,"evidence":"Inspected the module, callers, and tests against every acceptance criterion"}
+{"action":"review_fail","version":1,"task_ids":["T1"],"evidence":"Specific integration defect, location, and requested improvement"}
+```
+
+A failed review reopens the named tasks and their downstream dependencies. Repairs return through checkpoints and peer judgment before another integration review.
+
+After unanimous integration approval, the coordinator executes `checks` in `verification`. All must exit 0 for `completed`; models cannot submit a completed action. Failure preserves complete output and actual exit codes, reopens shared work, and repeats without a repair-attempt budget.
+
+## Pausing, recovery, and floor control
+
+Human presence is informational, not a scheduling condition. A transient `presence` event may contain an empty `names` list; losing the last human connection does not issue a control action, revoke the active turn, invalidate private sessions, or stop subsequent turns and acceptance checks. Committed results are persisted even with no clients connected. Joining returns the current state and replays the complete committed conversation without changing pause state. Explicit pauses, blockers, errors, completion, and recovery retain their usual behavior.
+
+The server process must remain alive for unattended work. Use `serve` with separate `join` clients; exiting a `join` client leaves the server running. Exiting the owner terminal of `start`, or shutting down the server itself, still closes the room and cancels active work.
+
+```json
+{"action":"blocked","reason":"Information or authority required from the human"}
+```
+
+A formal blocker preserves progress and pauses. In chatroom mode, ordinary `say` messages do not revoke work or reset the plan. `{"type":"redirect","text":"new guidance"}` (CLI `/redirect text`) revokes all active turns and reopens discussion. New guidance after completion or an explicit blocker also reopens discussion. Written files remain; interrupted replies cannot be committed. Serial mode retains its redirect-on-every-human-message behavior.
+
+Invalid actions, missing formal actions, nonzero exits, enabled hard timeouts, malformed transport, and quota errors fail the affected member in chatroom mode. Its pending work is not automatically replayed. Healthy members continue, but required votes are never waived; the room reports `degraded`. The `retry` control accepts an optional agent target (`/retry [agent]`); `/resume` also clears failures. No provider reset time is inferred and no automatic quota polling is performed. In serial mode these failures still pause the entire room. A stale concurrent action is a rejected decision, not a transport failure.
+
+Hard timeouts default to `0` (disabled). `idle_warning_seconds` defaults to 120 and emits a transient `turn.idle` event with `speaker`, `turn_id`, `phase`, `idle_seconds`, and `text` after a period without observable output. One event is emitted per continuous silent period; activity rearms the observer. Stdout chunks (including non-public tool events and partial frames), stderr, and acceptance-command output count as activity. In-process adapters without activity callbacks are observed through their yielded reply deltas. Notices never contain the underlying private output, enter public model context, cancel work, change workflow state, or advance/invalidate session cursors. They are informational, not proof of failure. `/interrupt` remains available; setting `idle_warning_seconds = 0` disables notices.
+
+Recovery loads the workflow snapshot saved atomically with its message and starts paused. Pending peer approvals are cleared after restart; restarting final review or verification requires fresh integration reviews. Existing contribution and feedback history is preserved.
+
+The room's `state` event contains `turns` (count since this server started), not a remaining budget. Automatic scheduling is uncapped. `/next` advances one eligible agent turn and pauses with `reason: "step_complete"`. In judgment, the author and peers who already approved are ineligible. During automatic verification, use `/resume`.
+
+Custom backends receive `AGENT_TEAM_PHASE=judging` for peer inspection, distinct from `review` for final integration review. They must honor read-only phases themselves.
+
+## Private-session synchronization
+
+The default `context_mode = "session"` is supported by Codex and Claude adapters. Chatroom Codex uses resident `app-server` JSONL RPC (`initialize`, `thread/start` or `thread/resume`, `turn/start`, and streamed notifications). Claude uses resident `--input-format stream-json --output-format stream-json`, an initialized control channel, and successful `result` boundaries. The process does not exit to delimit a turn. Unexpected transport closure invalidates the invocation. Custom command and mock backends remain stateless. `context_mode = "full"` uses fresh nonpersistent conversations; Codex retains the server with a fresh thread, while Claude restarts its process.
+
+A session-mode prompt includes a synchronization envelope:
+
+```json
+{"mode":"incremental","after":120,"through":145,"message_count":3}
+```
+
+`after` is the last acknowledged input cursor. `through` identifies the latest committed public message used for the invocation. IDs are event IDs and need not be consecutive. The transcript contains missing committed messages through that boundary, with original IDs and speakers. In concurrent incremental mode, it excludes separately acknowledged own replies already present in private history. A full rebuild uses `mode: "full"`, `after: 0`, and the entire public transcript without exclusions.
+
+The latest human message is also included as a labeled reminder, not a newly delivered message. Current workflow state and reported changed file paths are supplied every turn. Those paths are not an exhaustive filesystem diff. Private notes must not override team state or replace public findings and evidence.
+
+The coordinator persists a dirty marker before sending a new invocation. A completed public reply and its input acknowledgement are committed atomically. Concurrent sessions use `cursor_mode: "input"` and record `known_own_messages` separately: committing a reply must not jump the cursor past intervening unread peer messages. Serial sessions retain their reply-boundary optimization. A `[[PASS]]` acknowledges only its input boundary without adding a public message.
+
+Codex IDs are captured from `thread/start` or `thread/resume` results in resident mode, or `thread.started.thread_id` in serial mode. Claude IDs are checked on top-level session events; new IDs are preallocated UUIDs. Resumes must report the requested ID, and agents may not share IDs. Changed, malformed, or missing IDs fail closed.
+
+Cancellation, uncertain completion, or malformed formal actions make the private session unusable; the next authorized invocation reconstructs public context. A rejected concurrent decision is recorded publicly and can retain its clean private session. Resident connection errors require an explicit retry; no possible side effects are automatically replayed. Serial mode retains the one-time safe missing-session rebuild (`session.rebuilt`) before backend activity.
+
+`state.sessions` reports IDs, `synced_through`, `generation`, `dirty`, and concurrent own-message acknowledgements. While dirty, the cursor is the previous committed boundary, not proof that the active invocation succeeded. The synchronization envelope identifies full versus incremental input; `turn.context` records each concurrent invocation's prompt hash. Serial mode also reports `floor.granted.context_mode` and fallback hashes in `session.rebuilt`.
+
+The client request `{"type":"sessions"}` returns `session.state`. The `reset-session` control accepts an optional agent target, requires an idle floor, and pauses after discarding private-session references. Public history, workflow progress, and project files remain intact. Use `/resume` or `/next` afterward.
