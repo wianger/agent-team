@@ -131,11 +131,22 @@ def chat_instructions(workflow: Workflow | None) -> str:
     return (
         "Conversation lane: discuss the shared work and respond to peers while work proceeds. "
         "You do not hold a write lease or a formal review assignment. Do not modify files or "
-        "run tools in this lane. Do not issue workflow actions, votes, checkpoints, or verdicts. "
+        "run tools in this lane. Do not issue votes, checkpoints, or verdicts. "
         "Plain discussion cannot approve a plan or a changing implementation. "
         "Use [[PASS]] unless you have a concrete new point. The coordinator will assign formal "
         "work and review separately. Human chat is guidance to consider, not an automatic "
-        "reset of an agreed plan; explicit /redirect changes the plan.\n"
+        "reset of an agreed plan; explicit /redirect or /revise reopens planning.\n"
+        + (
+            "The only allowed action in this lane is a request to revisit an agreement, "
+            "not an approval or judgment. Use it only for concrete new evidence within the "
+            "user's authorized scope, and do not edit generated consensus documents:\n"
+            '<team-action>{"action":"request_revision",'
+            f'"version":{workflow.data["version"]},"reason":"specific change needed"}}'
+            "</team-action>\n"
+            "This cancels current work and requires a new proposal and fresh unanimous approval.\n"
+            if workflow and workflow.phase != "discussion"
+            else "Do not issue workflow actions in this conversation-only turn.\n"
+        )
         + (
             STATE_MARKER + json.dumps(workflow.snapshot(), ensure_ascii=False) + "\n"
             if workflow

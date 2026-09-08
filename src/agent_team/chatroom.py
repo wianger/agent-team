@@ -105,11 +105,12 @@ class ChatRoom(Room):
     def refresh_active(self):
         self.active = next((m.active.public() for m in self.members.values() if m.active), None)
 
-    def cancel_active(self):
+    def cancel_active(self, *, exclude=None):
         self.revision += 1
         for member in self.members.values():
             if (
                 member.invocation
+                and member.active.turn_id != exclude
                 and not member.invocation.done()
                 and not member.invocation.cancelling()
             ):
@@ -141,7 +142,7 @@ class ChatRoom(Room):
         self.cancel_active()
         if self.workflow:
             candidate = Workflow(self.config, self.workflow.snapshot())
-            candidate.reconsider()
+            candidate.reconsider(speaker=speaker, reason=text.strip())
             candidate.data["chat_epoch"] = candidate.data.get("chat_epoch", 0) + 1
             self.workflow = candidate
         if self.reason in {"completed", "blocked"}:
@@ -217,8 +218,10 @@ class ChatRoom(Room):
         return True
 
     def dispatch(self):
-        if self.manual_paused or not self.messages:
+        if not self.messages:
             return
+        if self.manual_paused and self.document_error:
+            return  # A failed document export is retried only after an explicit resume.
         phase = self.workflow.phase if self.workflow else "discussion"
         work = [m.active for m in self.members.values() if m.active and m.active.lane == "work"]
         # A unanimous vote is provisional until already-running discussion work has
@@ -232,8 +235,30 @@ class ChatRoom(Room):
             )
         )
         if agreeing and not work:
-            self.workflow.data["phase"] = phase = "implementation"
-            self.publish_system("Unanimous agreement confirmed; shared implementation may begin.")
+            candidate = Workflow(self.config, self.workflow.snapshot())
+            candidate.data["phase"] = phase = "implementation"
+            record = candidate.confirm_consensus()
+            self.messages.append(
+                self.emit(
+                    "message",
+                    role="system",
+                    speaker="system",
+                    text=f"Unanimous agreement confirmed. Consensus v{record['version']}: "
+                    f"{record['document']}. Shared implementation follows document publication.",
+                    workflow=candidate.snapshot(),
+                )
+            )
+            self.workflow = candidate
+        if not work and not self.ensure_consensus_documents():
+            return
+        if self.manual_paused:
+            return
+        # A redirected or revised write/check turn retains its lease until cancellation
+        # actually finishes. New formal readers must not inspect a changing workspace.
+        if self.writer is not None:
+            writing = self.members[self.writer].active
+            if phase not in {"implementation", "verification"} or writing.fence[0] != self.revision:
+                return
         if phase == "completed":
             self.manual_paused, self.reason = True, "completed"
             return
@@ -457,7 +482,11 @@ class ChatRoom(Room):
         if reply != PASS and self.workflow:
             reply, action = parse_action(reply)
             if action:
-                if turn.lane != "work" or turn.fence != self.fence():
+                if (
+                    turn.lane != "work"
+                    and action["action"] != "request_revision"
+                    or turn.fence != self.fence()
+                ):
                     rejected = (
                         "Workflow changed or this turn has no formal work assignment; "
                         "synchronize and reconsider."
@@ -480,6 +509,7 @@ class ChatRoom(Room):
                             "task_done",
                             "judge_fail",
                             "review_fail",
+                            "request_revision",
                         }:
                             candidate.data["chat_epoch"] = candidate.data.get("chat_epoch", 0) + 1
                         if (
@@ -517,6 +547,8 @@ class ChatRoom(Room):
         )
         if candidate:
             self.workflow = candidate
+        if action and action["action"] == "request_revision" and not rejected:
+            self.cancel_active(exclude=turn.turn_id)
         if note.startswith("blocked:"):
             self.manual_paused, self.reason = True, "blocked"
         if note or rejected:

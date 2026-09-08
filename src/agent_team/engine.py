@@ -9,6 +9,7 @@ from contextlib import aclosing
 from .activity import observe_activity
 from .adapters import Adapter, AdapterError, SessionUnavailable, make_adapter
 from .config import TeamConfig
+from .consensus import write_consensus
 from .context import PASS, build_prompt
 from .sessions import Sessions
 from .store import Store
@@ -54,6 +55,8 @@ class Room:
         self.runner: asyncio.Task | None = None
         self.closed = False
         self.single_step = False
+        self.document_versions: set[int] = set()
+        self.document_error: str | None = None
 
     def emit(self, kind: str, *, durable: bool = True, **data) -> dict:
         event = self.store.append(kind, **data) if durable else {"type": kind, **data}
@@ -76,14 +79,94 @@ class Room:
             if self.active and self.active["phase"] in {"implementation", "verification"}
             else None,
             "sessions": self.store.sessions(),
+            "consensus_documents": {
+                "ready_versions": sorted(self.document_versions),
+                "error": self.document_error,
+            },
         }
 
     def state(self) -> None:
         self.emit("state", durable=False, **self.status())
 
     def start(self) -> None:
+        self.recover_consensus_records()
+        self.ensure_consensus_documents()
         self.runner = asyncio.create_task(self.run(), name="room-coordinator")
         self.emit("room.started", recovered=bool(self.messages))
+
+    def recover_consensus_records(self) -> None:
+        if not self.workflow or self.workflow.data["consensus_history"]:
+            return
+        history = self.workflow.data["consensus_history"]
+        versions = set()
+        latest_state = None
+        for message in self.messages:
+            saved = message.get("workflow")
+            if (
+                not saved
+                or saved["phase"] == "discussion"
+                or not saved["proposal"]
+                or set(saved["approvals"]) != set(self.workflow.members)
+                or saved["objections"]
+            ):
+                continue
+            latest_state = saved
+            if saved["version"] in versions:
+                continue
+            previous = Workflow(self.config, saved)
+            previous.data["document_namespace"] = self.workflow.data["document_namespace"]
+            previous.data["consensus_history"] = history.copy()
+            history.append(previous.confirm_consensus(recovered=True))
+            versions.add(saved["version"])
+        if self.workflow.phase != "discussion" and self.workflow.data["version"] not in versions:
+            self.workflow.confirm_consensus(recovered=True)
+        if history:
+            if (
+                latest_state
+                and self.workflow.phase == "discussion"
+                and not self.workflow.data["revision_base"]
+            ):
+                previous = Workflow(self.config, latest_state)
+                previous.reconsider()
+                self.workflow.data["revision_base"] = previous.data["revision_base"]
+            latest = history[-1]
+            self.messages.append(
+                self.emit(
+                    "message",
+                    role="system",
+                    speaker="system",
+                    text=f"Recovered {len(history)} existing consensus records. "
+                    f"Latest: v{latest['version']} at {latest['document']}",
+                    workflow=self.workflow.snapshot(),
+                )
+            )
+
+    def ensure_consensus_documents(self) -> bool:
+        """Replay durable document intents before any further model or check work."""
+        if not self.workflow:
+            return True
+        for record in self.workflow.data["consensus_history"]:
+            if record["version"] in self.document_versions:
+                continue
+            try:
+                write_consensus(
+                    self.config.workspace, self.workflow.data["document_namespace"], record
+                )
+            except (OSError, ValueError) as exc:
+                self.document_error = str(exc)
+                self.manual_paused, self.reason = True, "document_error"
+                self.emit(
+                    "error",
+                    speaker="system",
+                    text=f"Consensus document could not be saved: {exc}. "
+                    "Resolve the document path, then /resume. "
+                    "The approved record remains in public history.",
+                )
+                return False
+            self.document_versions.add(record["version"])
+            self.emit("consensus.saved", version=record["version"], document=record["document"])
+        self.document_error = None
+        return True
 
     def cancel_active(self) -> None:
         self.revision += 1  # Revoke authority before asking the process to stop.
@@ -97,7 +180,7 @@ class Room:
         data = {}
         if self.workflow:
             candidate = Workflow(self.config, self.workflow.snapshot())
-            candidate.reconsider()
+            candidate.reconsider(speaker=speaker, reason=text.strip())
             data["workflow"] = candidate.snapshot()
         self.messages.append(
             self.emit("message", role="user", speaker=speaker, text=text.strip(), **data)
@@ -277,6 +360,9 @@ class Room:
             display, action = parse_action(reply)
             candidate = Workflow(self.config, self.workflow.snapshot())
             note = candidate.apply(speaker, action)
+            if self.workflow.phase == "discussion" and candidate.phase == "implementation":
+                record = candidate.confirm_consensus()
+                note += f" Consensus document: {record['document']}"
             data = {"workflow": candidate.snapshot(), "action": action}
             reply = display or note or "Turn processed."
         self.messages.append(
@@ -299,6 +385,7 @@ class Room:
                 self.emit(
                     "workflow.changed", durable=False, text=note, workflow=candidate.snapshot()
                 )
+            self.ensure_consensus_documents()
 
     async def verify(
         self, turn_id: str, on_activity: Callable[[], None] | None = None
@@ -341,6 +428,9 @@ class Room:
             if self.closed:
                 break
             if self.manual_paused or not self.messages:
+                continue
+            if not self.ensure_consensus_documents():
+                self.state()
                 continue
             phase = self.workflow.phase if self.workflow else "discussion"
             verifying = phase == "verification"

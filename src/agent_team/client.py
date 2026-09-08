@@ -17,11 +17,13 @@ HELP = """Type a message to participate.
 /resume         Continue automatically, without a round limit
 /retry [agent]  Retry one unavailable member, or all unavailable members
 /redirect text  Interrupt active work and reopen discussion with new guidance
+/revise text    Revisit the agreement, preserving documents and existing work
 /next [agent]   Advance exactly one eligible agent turn
 /status         Show active thinkers, the writer, and completed turn count
 /sessions       Show private session IDs and public-message synchronization
 /reset-session [agent]  Forget private session(s), preserving public history; pause
 /plan           Show the current proposal, votes, and acceptance criteria
+/consensus      Inspect the latest approved document and prior versions
 /tasks          Show shared work, contributions, judgments, and checks
 /history [id]   Read a page of 100 messages after this id
 /help           Show help
@@ -42,6 +44,7 @@ REASONS = {
     "completed": "Work and acceptance checks completed",
     "waiting_messages": "Members are listening for new messages",
     "degraded": "A member is unavailable; others can continue. Use /retry",
+    "document_error": "Consensus document needs attention; resolve the path and /resume",
 }
 
 
@@ -57,7 +60,7 @@ def parse_input(line: str) -> dict | str | None:
     if not line.startswith("/"):
         return {"type": "say", "text": line}
     command, *args = line.split()
-    if command == "/redirect" and args:
+    if command in {"/redirect", "/revise"} and args:
         return {"type": "redirect", "text": line.split(maxsplit=1)[1]}
     if command in {"/quit", "/help"} and not args:
         return command[1:]
@@ -69,7 +72,7 @@ def parse_input(line: str) -> dict | str | None:
         return {"type": "status"}
     if command == "/sessions" and not args:
         return {"type": "sessions"}
-    if command in {"/plan", "/tasks"} and not args:
+    if command in {"/plan", "/tasks", "/consensus"} and not args:
         return {"type": "workflow"}
     if command == "/history" and len(args) <= 1:
         after = int(args[0]) if args else 0
@@ -125,9 +128,29 @@ def describe_workflow(state: dict | None) -> str:
     if not state:
         return "Discussion-only mode.\n"
     lines = [f"Phase: {PHASES[state['phase']]} · proposal v{state['version']}"]
+    if history := state.get("consensus_history"):
+        latest = history[-1]
+        lines.extend(
+            [
+                f"Latest approved consensus: v{latest['version']}",
+                "Document: " + latest["document"],
+                "Use /consensus to read the approved snapshot; "
+                "/revise <guidance> to discuss changes.",
+            ]
+        )
+        if state["phase"] == "discussion":
+            lines.append("Under discussion: earlier approval does not authorize revised work.")
     proposal = state["proposal"]
     if not proposal:
-        return lines[0] + "\nNo proposal yet.\n"
+        if base := state.get("revision_base"):
+            lines.extend(
+                [
+                    "Previous scope (retained for revision):",
+                    base["proposal"]["summary"],
+                    "Existing artifacts and prior contributions remain; propose a revised plan.",
+                ]
+            )
+        return "\n".join(lines) + "\nNo proposal yet.\n"
     lines.extend(
         [
             proposal["summary"],

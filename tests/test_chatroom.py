@@ -244,9 +244,12 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
         await self.until(lambda: set(room.workflow.data["approvals"]) == {"a", "b", "c"})
         self.assertEqual(room.workflow.phase, "discussion")
         self.assertIsNone(room.writer)
+        self.assertEqual(room.workflow.data["consensus_history"], [])
+        self.assertFalse(list(self.path.glob("docs/agent-team/*/consensus-*.md")))
         object_gate.set()
         await self.until(lambda: room.reason == "waiting_messages")
         self.assertEqual(room.workflow.data["objections"], {"a": "Need evidence"})
+        self.assertFalse(list(self.path.glob("docs/agent-team/*/consensus-*.md")))
         self.assertFalse(
             any(e["type"] == "turn.started" and e["phase"] == "implementation" for e in self.events)
         )

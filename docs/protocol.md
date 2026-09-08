@@ -8,7 +8,7 @@ Execution permissions are separate from workflow authorization. The shipped conf
 
 Legacy `serial` mode retains per-invocation CLIs and full-access Codex even during non-writing phases, where non-writing is a workflow instruction. `phase_scoped` remains the fallback when the permission key is omitted: read-only/dontAsk for readers and workspace-write/acceptEdits for writers. Configuration fingerprints include interaction and permission modes; changing modes rebuilds private context, not public history.
 
-End formal work replies with one `<team-action>JSON</team-action>` block, after the public explanation. Plain discussion may omit it, and conversation-only turns must omit it. Interim commentary must not include action blocks. No text may follow the final block. Actions take effect only after a successfully completed invocation; transport `done` is not project completion.
+End formal work replies with one `<team-action>JSON</team-action>` block, after the public explanation. Plain discussion may omit it. Conversation-only turns may attach only a `request_revision` block, never an approval, checkpoint, or verdict. Interim commentary must not include action blocks. No text may follow the final block. Actions take effect only after a successfully completed invocation; transport `done` is not project completion.
 
 There are no round, text-length, task-count, or command-count budgets. Required types, nonempty fields, valid identifiers, real file paths, dependency order, and matching versions remain enforced.
 
@@ -22,7 +22,7 @@ New public messages are retained for every worker. This implementation synchroni
 
 Formal work uses a generation fence: room revision, proposal version, phase, decision epoch, and checkpoint identity/revision. New proposals, objections, checkpoints, and requested repairs invalidate older formal decisions. Late concurrent actions are stored as `rejected_action` plus `rejection`; they never alter the workflow, and the member can synchronize and reconsider. Duplicate approvals do not generate feedback loops. Unanimous discussion remains in `discussion` until outstanding formal discussion completes, then a durable system message records the transition to implementation.
 
-Discussion and eligible formal reviews can run concurrently. Writers/checks wait for all formal readers, including stale readers, to finish. Only one writer/check runner holds the lease. Other members may use the conversation-only `chat` lane while work proceeds; its output cannot approve, judge, or modify anything. Informal observations of changing files are not stable-snapshot review evidence. Custom backends must implement their phase restrictions themselves; native nonwriters use the execution controls described above. Do not leave background writers running beyond a checkpoint.
+Discussion and eligible formal reviews can run concurrently. Writers/checks wait for all formal readers, including stale readers, to finish. Only one writer/check runner holds the lease. Other members may use the conversation-only `chat` lane while work proceeds; its output cannot approve, judge, or modify files. It may request a new discussion of the agreement as described below. Informal observations of changing files are not stable-snapshot review evidence. Custom backends must implement their phase restrictions themselves; native nonwriters use the execution controls described above. Do not leave background writers running beyond a checkpoint.
 
 ## Proposal and consensus
 
@@ -49,6 +49,28 @@ A proposal creates a new version and clears previous votes. The proposer must al
 ```
 
 An objection revokes existing approvals. Only explicit unanimous approval of the same version, without outstanding objections, starts implementation. Plain discussion may omit an action; `[[PASS]]` yields the turn without voting.
+
+## Versioned consensus documents and revision
+
+Build workflow snapshots additionally carry `document_namespace`, `consensus_history`, `revision_base`, and `revision_request`. Each immutable consensus record contains the exact proposal, all approving members, proposal version, recording time, workspace-relative document path, preceding version (`supersedes`), and any revision request. A confirmed record is stored in the same durable workflow snapshot as the consensus decision; file generation is a replayable projection of that committed intent.
+
+The coordinator generates `docs/agent-team/<document_namespace>/consensus-vNNNN.md`. Different room namespaces avoid collisions, and proposal versions need not be consecutive. In serial mode, the final approval commits the record; in chatroom mode, a system message commits confirmation only after all in-flight formal discussion drains without an objection. No provisional vote creates a document. `/pause` permits active discussion to finish and be documented without authorizing an implementation turn.
+
+The coordinator publishes a complete file using create-only atomic linking and records `consensus.saved`. `state.consensus_documents` reports `ready_versions` and any export `error`. No further implementation starts while approved records remain unmaterialized. Errors pause with `reason: "document_error"`; `/resume` retries file publication, not the already-committed model invocation. Identical existing content is accepted without rewriting; differing content, special files, and symlinked document paths are rejected without overwrite. Native full-access writers and external editors are still expected to respect generated records; this is not an OS sandbox.
+
+On restart, missing approved files are rebuilt from the database. Legacy unanimous workflows can be recovered from historical messages even when the latest phase is discussion; recovery is additive, records its migration time honestly, and stays paused. The current workflow remains authoritative if a file has been externally edited or publication is pending.
+
+A member can request reopening the agreement after discussion, from a formal turn or a conversation-only lane:
+
+```json
+{"action":"request_revision","version":1,"reason":"New evidence requires changing the storage approach"}
+```
+
+The request must match the current proposal and concurrent generation fence. It requests reconsideration, not approval or implementation authority. It preserves `consensus_history` and stores the current proposal, checkpoint, feedback, contribution history, and check results in `revision_base`; `revision_request` identifies the requester and reason. The current draft and votes are cleared, active invocations are revoked, and existing files are not rolled back. A cancelled writer/check runner retains its lease until it actually exits; new formal readers wait for cleanup. The requesting turn itself is committed normally.
+
+Agents then propose a new version and seek fresh unanimous approval. Previous completed milestones and approvals are not carried into the revised plan automatically. Existing artifacts may be inspected and reused through new checkpoints and judgments. A new confirmed record links its predecessor without modifying any old document.
+
+Human `/revise <guidance>` aliases `/redirect` and sends the existing `{"type":"redirect","text":"..."}` request. `/consensus` requests the existing workflow response and displays the latest approved record and document history in the terminal. Both commands preserve wire compatibility; actual document creation and revision preservation require the upgraded coordinator. During ordinary discussion use `propose` or `object`, not `request_revision`. Chat-only configurations without a build workflow do not create formal consensus records.
 
 ## Shared implementation checkpoints
 

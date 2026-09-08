@@ -5,9 +5,12 @@ from __future__ import annotations
 import copy
 import json
 import re
+import uuid
+from datetime import UTC, datetime
 from pathlib import PurePosixPath
 
 from .config import TeamConfig, valid_name
+from .consensus import document_path
 
 ACTION_START = "<team-action>"
 ACTION_END = "</team-action>"
@@ -140,6 +143,10 @@ class Workflow:
         self.data.setdefault("checkpoint", None)
         self.data.setdefault("next_writer", None)
         self.data.setdefault("feedback", [])
+        self.data.setdefault("document_namespace", uuid.uuid4().hex)
+        self.data.setdefault("consensus_history", [])
+        self.data.setdefault("revision_base", None)
+        self.data.setdefault("revision_request", None)
         if self.data["proposal"]:
             for task in self.data["proposal"]["tasks"]:
                 task.setdefault("revision", 0)
@@ -152,7 +159,19 @@ class Workflow:
     def snapshot(self) -> dict:
         return copy.deepcopy(self.data)
 
-    def reconsider(self) -> None:
+    def reconsider(self, *, speaker: str = "user", reason: str = "Reconsider the plan") -> None:
+        if self.data["proposal"]:
+            self.data["revision_base"] = {
+                "version": self.data["version"],
+                "phase": self.phase,
+                "proposal": copy.deepcopy(self.data["proposal"]),
+                "checkpoint": copy.deepcopy(self.data["checkpoint"]),
+                "feedback": copy.deepcopy(self.data["feedback"]),
+                "checks_result": copy.deepcopy(self.data["checks_result"]),
+            }
+        self.data["revision_request"] = (
+            {"speaker": speaker, "reason": reason} if self.data["version"] else None
+        )
         self.data.update(
             phase="discussion",
             proposal=None,
@@ -164,6 +183,30 @@ class Workflow:
             next_writer=None,
             feedback=[],
         )
+
+    def confirm_consensus(self, *, recovered: bool = False) -> dict:
+        """Called by the coordinator after all relevant discussion has finished."""
+        if (
+            not self.data["proposal"]
+            or set(self.data["approvals"]) != set(self.members)
+            or self.data["objections"]
+        ):
+            raise ValueError("A consensus record requires unanimous approval without objections")
+        history = self.data["consensus_history"]
+        if history and history[-1]["version"] == self.data["version"]:
+            return history[-1]
+        record = {
+            "version": self.data["version"],
+            "recorded_at": datetime.now(UTC).isoformat(),
+            "proposal": copy.deepcopy(self.data["proposal"]),
+            "approvals": list(self.members),
+            "document": document_path(self.data["document_namespace"], self.data["version"]),
+            "supersedes": history[-1]["version"] if history else None,
+            "revision_request": copy.deepcopy(self.data["revision_request"]),
+            "recovered": recovered,
+        }
+        history.append(record)
+        return record
 
     def current_task(self) -> dict | None:
         proposal = self.data["proposal"]
@@ -247,6 +290,17 @@ class Workflow:
             return f"Proposal v{self.data['version']} awaits explicit approval from every member."
         if type(action.get("version")) is not int or action["version"] != self.data["version"]:
             raise ValueError("Action references a stale or missing proposal version")
+        if kind == "request_revision":
+            if self.phase == "discussion" or not self.data["proposal"]:
+                raise ValueError(
+                    "Already discussing; propose changes or object to the current draft"
+                )
+            reason = nonempty(action.get("reason"), "reason")
+            self.reconsider(speaker=speaker, reason=reason)
+            return (
+                f"{speaker} requests a revised agreement: {reason}. "
+                "Discuss and approve a new version."
+            )
         if self.phase == "discussion" and kind in {"approve", "object"}:
             if not self.data["proposal"]:
                 raise ValueError("There is no proposal to vote on")
@@ -407,6 +461,15 @@ def workflow_instructions(workflow: Workflow, speaker: str) -> str:
         "implementation, and they must judge yours. Respond to critiques with evidence.\n"
         "Preserve existing edits. No unrelated deletions, git resets, commits, pushes, or deploys. "
         "Do not modify .agent-team data. Inspect interrupted work before continuing.\n"
+        "Every confirmed agreement is saved by the coordinator as a versioned Markdown document "
+        "under docs/agent-team. Do not edit generated consensus records or ask a peer to write "
+        "them. The current workflow and consensus_history identify approved versions.\n"
+        "Agreements are revisable, not permanent. If new evidence requires changing the agreed "
+        "scope or approach, request a new discussion within the user's authorized scope: "
+        f'{{"action":"request_revision","version":{version},"reason":"specific new evidence"}}. '
+        "This stops current work, preserves the previous agreement and files, and requires "
+        "fresh unanimous approval of a new proposal. "
+        "During discussion, propose or object instead.\n"
         "Explain your reasoning to the team. End your FINAL reply with one "
         "<team-action>JSON</team-action> block; do not put action blocks in interim commentary.\n"
         'If blocked, return {"action":"blocked","reason":"missing user input or authority"}.\n'
@@ -418,6 +481,9 @@ def workflow_instructions(workflow: Workflow, speaker: str) -> str:
             "Propose shared milestones, not isolated assignments. An optional owner is only a "
             "suggestion, never exclusive ownership. Each member must explicitly approve the same "
             "version, including the proposer in a later turn. Reproposing clears every vote.\n"
+            "When revising, read revision_base and consensus_history. Explain what changes and "
+            "what remains valid; inspect and reuse existing artifacts where appropriate. "
+            "Previous contributions are context, not automatic acceptance of revised milestones.\n"
             'Proposal: {"action":"propose","summary":"goal, approach, assumptions and tradeoffs",'
             '"acceptance":["checkable requirement"],"tasks":[{"id":"T1","title":"Shared milestone",'
             '"details":"what to implement and judge","depends_on":[]}],'
