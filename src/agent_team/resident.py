@@ -9,7 +9,14 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-from .adapters import AdapterError, EventDecoder, command_for, drain_and_terminate, make_adapter
+from .adapters import (
+    AdapterError,
+    EventDecoder,
+    command_for,
+    drain_and_terminate,
+    make_adapter,
+    provider_error,
+)
 from .config import AgentConfig
 from .sessions import session_id as validate_session_id
 from .streams import iter_lines
@@ -73,9 +80,10 @@ class JsonProcess:
                 await self.route(event)
             await self.process.wait()
             await self.stderr_task
-            raise AdapterError(
+            raise provider_error(
+                self.agent.backend,
                 f"Resident {self.agent.backend} connection closed "
-                f"(exit {self.process.returncode}): " + self.stderr.decode(errors="replace")
+                f"(exit {self.process.returncode}): " + self.stderr.decode(errors="replace"),
             )
         except asyncio.CancelledError:
             raise
@@ -123,7 +131,7 @@ class JsonProcess:
         future = self.pending.get(identifier)
         if future is not None and not future.done():
             if error is not None:
-                future.set_exception(AdapterError(json.dumps(error, ensure_ascii=False)))
+                future.set_exception(provider_error(self.agent.backend, error))
             else:
                 future.set_result(result)
 
@@ -244,6 +252,7 @@ class CodexResident(JsonProcess):
             result = await self.request("turn/start", params)
             turn_id = result["turn"]["id"]
             items: dict[str, str] = {}
+            last_error = None
             while True:
                 event = await self.next_event()
                 method, data = event.get("method"), event.get("params", {})
@@ -251,7 +260,9 @@ class CodexResident(JsonProcess):
                     continue
                 if data.get("turnId", turn_id) != turn_id:
                     continue
-                if method == "item/agentMessage/delta":
+                if method == "error":
+                    last_error = data.get("error")
+                elif method == "item/agentMessage/delta":
                     key, delta = data["itemId"], data["delta"]
                     if not isinstance(delta, str):
                         raise AdapterError("Codex text delta must be a string")
@@ -276,9 +287,8 @@ class CodexResident(JsonProcess):
                 elif method == "turn/completed" and data.get("turn", {}).get("id") == turn_id:
                     turn = data["turn"]
                     if turn["status"] != "completed":
-                        raise AdapterError(
-                            "Codex turn did not complete: "
-                            + json.dumps(turn.get("error") or turn["status"])
+                        raise provider_error(
+                            "codex", turn.get("error") or last_error or turn["status"]
                         )
                     if not any(t.strip() for t in items.values()):
                         raise AdapterError("Codex returned an empty reply")

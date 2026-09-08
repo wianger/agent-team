@@ -70,7 +70,7 @@ Enter sends the complete draft; Alt+Enter or Ctrl-J inserts a newline. Multiline
 
 **Ctrl-C exits immediately when idle with no draft.** During active work, the first press requests interruption and another confirms exit. An unsent draft also requires confirmation; Escape or editing cancels it. If delivery stalls, another Ctrl-C forces local exit without guaranteeing delivery.
 
-**Any agent call failure pauses the entire team** and interrupts other active turns. Read `/activity`, resolve the issue, wait for cancellation cleanup, then use `/retry [agent]` or `/resume`. A targeted retry cannot resume while another failure remains. Ordinary messages and redirects do not clear failures. There is no automatic retry loop, quota-reset guess, or waiver of required votes. Cancellation never rolls back file changes already made.
+**Quota handling follows the backend:** confirmed Claude usage exhaustion cools down only that member; available peers continue, and the server retries Claude after 5 hours. Another quota failure starts another 5-hour wait. Codex usage exhaustion and other call failures pause the whole team and interrupt active turns; use `/resume` or `/retry` after resolving the issue. `/retry [agent]` can retry Claude early, but cannot bypass another blocking failure. Timers preserve their deadline across restarts and never resume a paused team. `/status` shows recovery details. Required votes are never waived; cancellation never rolls back existing file changes.
 
 Leaving `agent-team` or `start` stops its server but retains history. For unattended work, use separate terminals in the same project directory:
 

@@ -29,7 +29,9 @@ HELP = """Type a message to participate.
 /help           Show help
 /quit           Leave this terminal (Ctrl-D)
 Chatroom messages join the conversation without interruption; /redirect changes direction.
-Any failed team call pauses the whole room and interrupts its active turns.
+Claude usage exhaustion cools down that member for 5 hours while peers may continue.
+Codex usage exhaustion and other failed calls pause the whole team until explicit recovery.
+Automatic Claude retries never resume a paused team or waive required votes.
 Resolve the issue and wait for active turns to stop, then /retry [agent] or /resume.
 Legacy serial mode still interrupts on ordinary human messages. Use /resume after a manual pause.
 """

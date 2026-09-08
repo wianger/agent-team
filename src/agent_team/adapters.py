@@ -22,6 +22,25 @@ class AdapterError(RuntimeError):
     pass
 
 
+class QuotaExceeded(AdapterError):
+    """A native provider explicitly rejected work because usage was exhausted."""
+
+
+def provider_error(backend: str, detail: object) -> AdapterError:
+    """Classify provider errors, never ordinary assistant text or tool output."""
+    text = detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False)
+    quota = backend in {"claude", "codex"} and re.search(
+        r"usage[_ ]?limit[_ ]?(?:exceeded|reached)|insufficient_quota|"
+        r"quota[_ ](?:exceeded|exhausted)|"
+        r"(?:usage|subscription|weekly|session) (?:limit|quota).{0,30}"
+        r"(?:reached|exceeded|exhausted)|"
+        r"you(?:'|\u2019)ve (?:hit|reached) your (?:[\w -]+ )?limit",
+        text,
+        re.IGNORECASE,
+    )
+    return (QuotaExceeded if quota else AdapterError)(text)
+
+
 class SessionUnavailable(AdapterError):
     """A resume was explicitly rejected before any session/model activity."""
 
@@ -151,6 +170,7 @@ class EventDecoder:
         self.activity_started = False
         self.expected_permission_mode = expected_permission_mode
         self.permission_mode: str | None = None
+        self.quota_info: dict = {}
 
     def feed(self, event: dict) -> str:
         if not isinstance(event, dict):
@@ -203,10 +223,14 @@ class EventDecoder:
         ):
             self.activity_started = True
         if self.backend == "codex":
+            if kind == "error":
+                error = provider_error("codex", event.get("error") or event.get("message", ""))
+                if isinstance(error, QuotaExceeded):
+                    raise error
             if kind == "error" and unavailable_session(str(event.get("message", ""))):
                 raise AdapterError(str(event["message"]))
             if kind == "turn.failed":
-                raise AdapterError(str(event.get("error", "Codex turn failed")))
+                raise provider_error("codex", event.get("error", "Codex turn failed"))
             if kind in {"item.completed", "item.updated"}:
                 item = event.get("item", {})
                 if item.get("type") == "agent_message":
@@ -221,6 +245,19 @@ class EventDecoder:
             if kind == "turn.completed":
                 self.complete = True
         elif self.backend == "claude":
+            if kind == "rate_limit_event":
+                # Utilization warnings are advisory, not failed turns. Use this metadata
+                # only if a later native error actually rejects the current invocation.
+                self.quota_info = event.get("rate_limit_info") or {}
+            if kind == "assistant" and event.get("error"):
+                detail = " ".join(
+                    block.get("text", "")
+                    for block in event.get("message", {}).get("content", [])
+                    if block.get("type") == "text"
+                )
+                if event["error"] == "rate_limit" and self.quota_info.get("status") == "rejected":
+                    raise QuotaExceeded(detail or json.dumps(self.quota_info))
+                raise provider_error("claude", detail or event["error"])
             if kind == "stream_event":
                 part = event.get("event", {}).get("delta", {})
                 if part.get("type") == "text_delta":
@@ -233,7 +270,9 @@ class EventDecoder:
                 )
             elif kind == "result":
                 if event.get("is_error") or event.get("subtype", "success") != "success":
-                    raise AdapterError(str(event.get("errors") or event.get("result") or event))
+                    raise provider_error(
+                        "claude", event.get("errors") or event.get("result") or event
+                    )
                 final = event.get("result") or self.claude_blocks
                 if not self.text:
                     delta = final
@@ -389,7 +428,9 @@ class CLIAdapter:
             await stdin_task
             if code:
                 detail = stderr_output.decode(errors="replace").strip()
-                raise AdapterError(f"CLI exit code {code}: {detail or 'no stderr'}")
+                raise provider_error(
+                    self.agent.backend, f"CLI exit code {code}: {detail or 'no stderr'}"
+                )
             decoder.finish()
             if persist_session and not decoder.session_id:
                 raise AdapterError(

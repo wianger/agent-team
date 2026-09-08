@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-from agent_team.adapters import AdapterError
+from agent_team.adapters import AdapterError, QuotaExceeded
 from agent_team.config import AgentConfig
 from agent_team.resident import ClaudeResident, CodexResident
 
@@ -204,6 +204,14 @@ class ResidentTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(AdapterError, "auto permission mode"):
             await self.ask(adapter, "bad-permission", session_id=adapter.result_session_id)
         self.assertIsNone(adapter.process)
+
+    async def test_native_quota_errors_keep_their_type_and_invalidate_the_invocation(self):
+        for backend in ("claude", "codex"):
+            adapter = self.make(backend)
+            with self.subTest(backend=backend), self.assertRaises(QuotaExceeded):
+                await self.ask(adapter, "quota")
+            self.assertIsNone(adapter.result_session_id)
+            self.assertIsNone(adapter.process)
 
     async def test_transport_failures_unblock_pending_rpc_and_never_commit_partial_output(self):
         for backend in ("codex", "claude"):

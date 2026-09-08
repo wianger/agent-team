@@ -83,8 +83,16 @@ class ChatRoom(Room):
             writer=self.writer,
             runtimes={
                 name: {
-                    "state": "failed" if m.error else "thinking" if m.active else "waiting",
-                    "error": m.error,
+                    "state": "quota_wait"
+                    if self.quota_blocked(name)
+                    else "retrying"
+                    if name in self.quota_retries
+                    else "failed"
+                    if m.error
+                    else "thinking"
+                    if m.active
+                    else "waiting",
+                    "error": m.error or self.quotas.get(name, {}).get("error"),
                     "pid": getattr(getattr(self.adapters.get(name), "process", None), "pid", None),
                     "pending_messages": sum(
                         msg["id"] > (m.active.through if m.active else m.seen[0] if m.seen else 0)
@@ -106,7 +114,15 @@ class ChatRoom(Room):
         self.active = next((m.active.public() for m in self.members.values() if m.active), None)
 
     def failed_members(self):
-        return [name for name, member in self.members.items() if member.error is not None]
+        return [
+            name
+            for name, member in self.members.items()
+            if member.error is not None or name in self.fatal_quotas()
+        ]
+
+    def on_quota_retry(self, name):
+        super().on_quota_retry(name)
+        self.members[name].seen = None
 
     def cancel_active(self, *, exclude=None):
         self.revision += 1
@@ -200,6 +216,7 @@ class ChatRoom(Room):
             for name in [target] if target else names + ["system"]:
                 self.members[name].error = None
                 self.members[name].seen = None
+            self.control_quotas(action, target)
             self.manual_paused, self.reason = False, "running"
             self.single_step = action == "next"
             self.next_target = target if self.single_step else None
@@ -215,7 +232,12 @@ class ChatRoom(Room):
     def launch(self, name, phase, lane, *, force=False):
         member = self.members[name]
         head, fence = self.messages[-1]["id"], self.fence()
-        if member.active or member.error or (not force and member.seen == (head, fence, lane)):
+        if (
+            member.active
+            or member.error
+            or self.quota_blocked(name)
+            or (not force and member.seen == (head, fence, lane))
+        ):
             return False
         flow = self.workflow.clone() if self.workflow else None
         turn = Turn(name, phase, lane, head, fence, flow)
@@ -268,6 +290,7 @@ class ChatRoom(Room):
             return
         if self.manual_paused:
             return
+        self.retry_due_quotas()
         # A redirected or revised write/check turn retains its lease until cancellation
         # actually finishes. New formal readers must not inspect a changing workspace.
         if self.writer is not None:
@@ -280,19 +303,18 @@ class ChatRoom(Room):
         if self.single_step:
             if work:
                 return
-            name = self.next_target or (
-                self.workflow.choose(self.cursor)
-                if self.workflow
-                else list(self.adapters)[self.cursor]
-            )
-            self.launch(name, phase, "work", force=True)
+            name = self.choose_available(self.next_target)
+            if name:
+                self.launch(name, phase, "work", force=True)
             return
         if phase in {"implementation", "verification"}:
             if not work:
                 if phase == "verification":
                     self.launch("system", phase, "work")
                 else:
-                    self.launch(self.workflow.choose(self.cursor), phase, "work")
+                    name = self.choose_available()
+                    if name:
+                        self.launch(name, phase, "work")
             primary = {self.writer} if self.writer else set()
         else:
             # Drain formal readers of the previous checkpoint before starting the next
@@ -322,18 +344,6 @@ class ChatRoom(Room):
             self.dispatch()
             self.state()
 
-    def publish_system(self, text):
-        self.messages.append(
-            self.emit(
-                "message",
-                role="system",
-                speaker="system",
-                text=text,
-                **({"workflow": self.workflow.snapshot()} if self.workflow else {}),
-            )
-        )
-        self.wake.set()
-
     async def member_loop(self, name):
         member = self.members[name]
         while True:
@@ -346,6 +356,8 @@ class ChatRoom(Room):
                     continue
                 member.invocation = asyncio.create_task(self.invoke(turn), name=f"thinking-{name}")
                 outcome = await member.invocation
+                if name != "system":
+                    self.quota_succeeded(name)
                 # Its own publication is already in private memory and must not, by
                 # itself, trigger another model call. Never skip intervening peer input.
                 unseen = [m for m in self.messages if m["id"] > turn.through]
@@ -366,25 +378,30 @@ class ChatRoom(Room):
             except Exception as exc:
                 if turn.fence[0] == self.revision:
                     outcome = "failed"
-                    member.error = (
-                        "Turn timed out"
-                        if isinstance(exc, TimeoutError)
-                        else str(exc) or type(exc).__name__
-                    )
-                    self.manual_paused, self.reason = True, "error"
-                    self.single_step, self.next_target = False, None
-                    # Revoke every in-flight reply before cancelling other invocations.
-                    # A writer keeps its lease until its own cleanup has completed.
-                    self.cancel_active(exclude=turn.turn_id)
-                    self.emit("error", speaker=name, turn_id=turn.turn_id, text=member.error)
-                    self.publish_system(
-                        f"{name} is unavailable: {member.error}. The entire team is paused; "
-                        "all other active turns are being interrupted. Required votes are not "
-                        "waived. Resolve the issue, wait for active turns to stop, then use "
-                        "/retry or /resume to continue."
-                    )
+                    if self.record_quota(name, exc, turn.turn_id):
+                        if name in self.fatal_quotas():
+                            self.cancel_active(exclude=turn.turn_id)
+                    else:
+                        self.clear_quota(name)
+                        member.error = (
+                            "Turn timed out"
+                            if isinstance(exc, TimeoutError)
+                            else str(exc) or type(exc).__name__
+                        )
+                        self.manual_paused, self.reason = True, "error"
+                        self.single_step, self.next_target = False, None
+                        # A writer keeps its lease until cancellation cleanup completes.
+                        self.cancel_active(exclude=turn.turn_id)
+                        self.emit("error", speaker=name, turn_id=turn.turn_id, text=member.error)
+                        self.publish_system(
+                            f"{name} is unavailable: {member.error}. The entire team is paused; "
+                            "all other active turns are being interrupted. Required votes are not "
+                            "waived. Resolve the issue, wait for active turns to stop, then use "
+                            "/retry or /resume to continue."
+                        )
             finally:
                 if name != "system" and outcome not in {"completed", "passed", "rejected"}:
+                    self.quota_retries.discard(name)
                     self.sessions.invalidate(name, "Concurrent invocation did not commit")
                 if self.writer == name:
                     self.writer = None
@@ -582,6 +599,7 @@ class ChatRoom(Room):
 
     async def close(self):
         self.closed = True
+        self.schedule_quota_retry()
         self.shutdown.set()
         self.cancel_active()
         self.wake.set()

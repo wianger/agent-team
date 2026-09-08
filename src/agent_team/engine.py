@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import time
 import uuid
 from collections.abc import Callable
 from contextlib import aclosing
+from datetime import UTC, datetime
 
 from .activity import observe_activity
-from .adapters import Adapter, AdapterError, SessionUnavailable, make_adapter
+from .adapters import Adapter, AdapterError, QuotaExceeded, SessionUnavailable, make_adapter
 from .config import TeamConfig
 from .consensus import write_consensus
 from .context import PASS, build_prompt
@@ -15,6 +17,8 @@ from .sessions import Sessions
 from .store import Store
 from .verification import run_checks
 from .workflow import Workflow, parse_action
+
+CLAUDE_QUOTA_RETRY_SECONDS = 5 * 60 * 60
 
 
 class Room:
@@ -57,6 +61,17 @@ class Room:
         self.single_step = False
         self.document_versions: set[int] = set()
         self.document_error: str | None = None
+        self.quotas: dict[str, dict] = {}
+        self.quota_retries: set[str] = set()
+        self.quota_timer: asyncio.TimerHandle | None = None
+        backends = {a.name: a.backend for a in config.agents}
+        for event in store.events():
+            if event["type"] == "agent.quota":
+                name, quota = event["speaker"], event["quota"]
+                if quota and quota["backend"] == backends.get(name):
+                    self.quotas[name] = quota
+                else:
+                    self.quotas.pop(name, None)
 
     def emit(self, kind: str, *, durable: bool = True, **data) -> dict:
         event = self.store.append(kind, **data) if durable else {"type": kind, **data}
@@ -79,6 +94,10 @@ class Room:
             if self.active and self.active["phase"] in {"implementation", "verification"}
             else None,
             "sessions": self.store.sessions(),
+            "quotas": {
+                name: {**quota, "retrying": name in self.quota_retries}
+                for name, quota in self.quotas.items()
+            },
             "consensus_documents": {
                 "ready_versions": sorted(self.document_versions),
                 "error": self.document_error,
@@ -86,7 +105,132 @@ class Room:
         }
 
     def state(self) -> None:
+        self.schedule_quota_retry()
         self.emit("state", durable=False, **self.status())
+
+    def publish_system(self, text: str) -> None:
+        self.messages.append(
+            self.emit(
+                "message",
+                role="system",
+                speaker="system",
+                text=text,
+                **({"workflow": self.workflow.snapshot()} if self.workflow else {}),
+            )
+        )
+        self.wake.set()
+
+    def quota_blocked(self, name: str) -> bool:
+        return name in self.quotas and name not in self.quota_retries
+
+    def fatal_quotas(self) -> list[str]:
+        return [name for name, quota in self.quotas.items() if quota["retry_at"] is None]
+
+    def clear_quota(self, name: str) -> None:
+        self.quota_retries.discard(name)
+        if self.quotas.pop(name, None) is not None:
+            self.emit("agent.quota", speaker=name, quota=None)
+
+    def quota_succeeded(self, name: str) -> None:
+        if name in self.quotas:
+            self.clear_quota(name)
+            self.publish_system(f"{name} recovered from its usage limit and rejoined the team.")
+
+    def record_quota(self, name: str, error: Exception, turn_id: str) -> bool:
+        backend = next((a.backend for a in self.config.agents if a.name == name), None)
+        if not isinstance(error, QuotaExceeded) or backend not in {"claude", "codex"}:
+            return False
+        retry_at = time.time() + CLAUDE_QUOTA_RETRY_SECONDS if backend == "claude" else None
+        quota = {"backend": backend, "error": str(error), "retry_at": retry_at}
+        self.quotas[name] = quota
+        self.quota_retries.discard(name)
+        self.passes.clear()
+        self.emit("agent.quota", speaker=name, quota=quota)
+        self.emit("error", speaker=name, turn_id=turn_id, text=str(error), quota=True)
+        if retry_at is None:
+            self.manual_paused, self.reason = True, "error"
+            text = (
+                f"{name} reached its Codex usage limit. The entire team is paused; "
+                "active turns are being interrupted. No automatic retry will run. "
+                "Wait for cleanup, then use /resume or /retry to restore the team."
+            )
+        else:
+            when = datetime.fromtimestamp(retry_at, UTC).isoformat()
+            text = (
+                f"{name} reached its Claude usage limit. Other available members may continue. "
+                f"Automatic retry is scheduled for {when} (5 hours after this failure), "
+                "unless the team is paused. Required consensus and review votes are not waived. "
+                "Partial changes may remain; inspect them before continuing."
+            )
+            if self.single_step:
+                self.manual_paused, self.reason = True, "step_complete"
+        self.single_step, self.next_target = False, None
+        self.publish_system(text)
+        return True
+
+    def retry_due_quotas(self) -> None:
+        if self.closed or self.manual_paused or self.fatal_quotas():
+            return
+        for name, quota in self.quotas.items():
+            if (
+                quota["retry_at"] is not None
+                and quota["retry_at"] <= time.time()
+                and name not in self.quota_retries
+            ):
+                self.quota_retries.add(name)
+                self.on_quota_retry(name)
+                self.publish_system(f"Retrying {name} after its Claude quota cooldown.")
+
+    def on_quota_retry(self, name: str) -> None:
+        self.passes.clear()
+
+    def schedule_quota_retry(self) -> None:
+        if self.quota_timer:
+            self.quota_timer.cancel()
+            self.quota_timer = None
+        if self.closed or self.manual_paused or not self.messages or self.fatal_quotas():
+            return
+        due = [
+            quota["retry_at"]
+            for name, quota in self.quotas.items()
+            if quota["retry_at"] is not None and name not in self.quota_retries
+        ]
+        if due:
+            self.quota_timer = asyncio.get_running_loop().call_later(
+                max(0, min(due) - time.time()), self.wake.set
+            )
+
+    def control_quotas(self, action: str, target: str | None) -> None:
+        for name in list(self.quotas):
+            if (target is None or target == name) and (
+                action == "retry"
+                or action == "next"
+                and target == name
+                or action == "resume"
+                and name in self.fatal_quotas()
+            ):
+                self.clear_quota(name)
+                self.on_quota_retry(name)
+
+    def choose_available(self, target: str | None = None) -> str | None:
+        preferred = (
+            self.workflow.choose(self.cursor, target)
+            if self.workflow
+            else target or list(self.adapters)[self.cursor]
+        )
+        if not self.quota_blocked(preferred):
+            return preferred
+        names = list(self.adapters)
+        eligible = self.workflow.eligible() if self.workflow else names
+        return next(
+            (
+                names[(self.cursor + i) % len(names)]
+                for i in range(len(names))
+                if names[(self.cursor + i) % len(names)] in eligible
+                and not self.quota_blocked(names[(self.cursor + i) % len(names)])
+            ),
+            None,
+        )
 
     def start(self) -> None:
         self.recover_consensus_records()
@@ -219,7 +363,7 @@ class Room:
             self.reason = "user"
             if action == "interrupt":
                 self.cancel_active()
-        elif action in {"resume", "next"}:
+        elif action in {"resume", "next", "retry"}:
             if not self.messages:
                 raise ValueError("Send an idea first")
             if action == "next" and self.active is not None:
@@ -230,13 +374,16 @@ class Room:
                 raise ValueError("Idea completed; send a new idea or revision to collaborate again")
             if self.workflow and self.workflow.phase == "verification" and action == "next":
                 raise ValueError("Acceptance checks are pending; use /resume")
+            if target is not None and target not in self.adapters:
+                raise ValueError(f"Unknown agent: {target}")
+            if self.fatal_quotas() and self.active:
+                raise ValueError("Wait for interrupted turns to stop before retrying the team")
             if action == "next" and target:
                 names = [a.name for a in self.config.agents]
-                if target not in names:
-                    raise ValueError(f"Unknown agent: {target}; available: {', '.join(names)}")
                 if self.workflow:
                     self.workflow.choose(self.cursor, target)
                 self.cursor = names.index(target)
+            self.control_quotas(action, target)
             self.manual_paused = False
             self.single_step = action == "next"
             self.next_target = target if self.single_step else None
@@ -244,6 +391,8 @@ class Room:
             self.passes.clear()
         else:
             raise ValueError(f"Unknown control action: {action}")
+        if self.fatal_quotas():
+            self.manual_paused, self.reason = True, "error"
         self.emit("room.control", action=action, target=target)
         self.state()
         self.wake.set()
@@ -429,6 +578,12 @@ class Room:
                 break
             if self.manual_paused or not self.messages:
                 continue
+            self.retry_due_quotas()
+            available = {name for name in self.adapters if not self.quota_blocked(name)}
+            if self.quotas and (not available or available <= self.passes):
+                self.reason = "waiting_quota"
+                self.state()
+                continue
             if not self.ensure_consensus_documents():
                 self.state()
                 continue
@@ -438,16 +593,12 @@ class Room:
                 self.manual_paused, self.reason = True, "completed"
                 self.state()
                 continue
-            name = (
-                "system"
-                if verifying
-                else (
-                    self.workflow.choose(self.cursor, self.next_target)
-                    if self.workflow
-                    else self.config.agents[self.cursor].name
-                )
-            )
+            name = "system" if verifying else self.choose_available(self.next_target)
             self.next_target = None
+            if name is None:
+                self.reason = "waiting_quota"
+                self.state()
+                continue
             agent = next((a for a in self.config.agents if a.name == name), None)
             turn_id = uuid.uuid4().hex
             through = self.messages[-1]["id"]
@@ -530,6 +681,8 @@ class Room:
                         outcome = "completed"
                         self.passes.clear()
                         self.accept_reply(name, reply, turn_id, session_update)
+                    if not verifying:
+                        self.quota_succeeded(name)
                     if not self.manual_paused:
                         if len(self.passes) == len(self.config.agents):
                             self.manual_paused = True
@@ -542,10 +695,12 @@ class Room:
             except Exception as exc:
                 if revision == self.revision:
                     outcome = "failed"
-                    self.manual_paused, self.reason = True, "error"
-                    detail = "Turn timed out" if isinstance(exc, TimeoutError) else str(exc)
-                    self.emit("error", speaker=name, turn_id=turn_id, text=detail)
-                    if self.workflow:
+                    if not self.record_quota(name, exc, turn_id):
+                        self.clear_quota(name)
+                        self.manual_paused, self.reason = True, "error"
+                        detail = "Turn timed out" if isinstance(exc, TimeoutError) else str(exc)
+                        self.emit("error", speaker=name, turn_id=turn_id, text=detail)
+                    if self.workflow and not isinstance(exc, QuotaExceeded):
                         self.messages.append(
                             self.emit(
                                 "message",
@@ -558,6 +713,7 @@ class Room:
                         )
             finally:
                 if not verifying and outcome not in {"completed", "passed"}:
+                    self.quota_retries.discard(name)
                     self.sessions.invalidate(name, "Invocation cancelled, failed, or not committed")
                 self.emit("floor.released", speaker=name, turn_id=turn_id, outcome=outcome)
                 self.active, self.active_task = None, None
@@ -572,6 +728,7 @@ class Room:
 
     async def close(self) -> None:
         self.closed = True
+        self.schedule_quota_retry()
         self.cancel_active()
         self.wake.set()
         if self.runner:

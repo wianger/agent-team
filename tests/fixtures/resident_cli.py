@@ -37,6 +37,29 @@ for raw in sys.stdin:
             turn_id = str(uuid.uuid4())
             base = {"threadId": session, "turnId": turn_id}
             send({"id": event["id"], "result": {"turn": {"id": turn_id}}})
+            if prompt == "quota":
+                send(
+                    {
+                        "method": "error",
+                        "params": {
+                            **base,
+                            "error": {
+                                "message": "Try later",
+                                "codexErrorInfo": "UsageLimitExceeded",
+                            },
+                        },
+                    }
+                )
+                send(
+                    {
+                        "method": "turn/completed",
+                        "params": {
+                            **base,
+                            "turn": {"id": turn_id, "status": "failed", "error": None},
+                        },
+                    }
+                )
+                continue
             send({"method": "item/reasoning/textDelta", "params": {**base, "delta": "private"}})
             text = f"public {turns}"
             send(
@@ -96,7 +119,23 @@ for raw in sys.stdin:
                     else permission,
                 }
             )
-        if prompt == "try-write" or prompt.startswith("try-tool:"):
+        if prompt == "quota":
+            send(
+                {
+                    "type": "rate_limit_event",
+                    "rate_limit_info": {"status": "rejected", "rateLimitType": "five_hour"},
+                }
+            )
+            send(
+                {
+                    "type": "assistant",
+                    "error": "rate_limit",
+                    "session_id": session,
+                    "message": {"content": [{"type": "text", "text": "Try again later"}]},
+                }
+            )
+            result("Try again later")
+        elif prompt == "try-write" or prompt.startswith("try-tool:"):
             waiting = str(uuid.uuid4())
             send(
                 {

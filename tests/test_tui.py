@@ -172,6 +172,27 @@ class PresentationTests(unittest.TestCase):
         self.assertIn("live · not published", self.view.page("conversation").text)
         self.assertIn("earlier draft is not replayed", self.view.page("conversation").text)
 
+    def test_quota_status_distinguishes_automatic_and_manual_recovery(self):
+        self.view.handle(
+            welcome(
+                quotas={
+                    "member_a": {
+                        "backend": "claude",
+                        "error": "Usage exhausted",
+                        "retry_at": 2_000_018_000,
+                    },
+                    "member_b": {"backend": "codex", "error": "Usage exhausted", "retry_at": None},
+                }
+            )
+        )
+        statuses = dict(self.view.member_statuses())
+        self.assertEqual(statuses["member_a"], "Quota · cooldown")
+        self.assertEqual(statuses["member_b"], "Quota · manual resume")
+        page = self.view.page("status").text
+        self.assertIn("Retry due:", page)
+        self.assertIn("No automatic retry", page)
+        self.assertIn("deferred while paused", page)
+
     def test_member_states_and_complete_errors_remain_available(self):
         self.view.handle(welcome(paused=False, messages=1, reason="running"))
         self.view.handle(turn(phase="implementation"))

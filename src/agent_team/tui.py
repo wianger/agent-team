@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from prompt_toolkit.application import Application
@@ -273,6 +274,12 @@ class RoomView:
             return "Messages do not resume a paused team. Use /resume when you are ready."
         if not self.messages and not self.state.get("messages"):
             return "Send your idea to start discussion automatically. Work follows agreement."
+        if self.state.get("quotas"):
+            return (
+                "Claude quota cooldown: other members may continue. Retry is automatic after "
+                "5 hours while the team is running; /retry [agent] tries earlier. "
+                "Votes are retained."
+            )
         if self.state.get("interaction_mode") == "serial":
             return "Serial mode: a message interrupts work. /pause lets the current turn finish."
         return "Messages add context. /redirect <guidance> stops work to change direction."
@@ -282,8 +289,17 @@ class RoomView:
         for agent in self.state.get("agents", []):
             name = agent["name"]
             runtime = self.state.get("runtimes", {}).get(name, {})
+            quota = self.state.get("quotas", {}).get(name)
             turn = next((t for t in self.turns.values() if t["speaker"] == name), None)
-            if runtime.get("error"):
+            if quota:
+                status = (
+                    "Retrying quota"
+                    if quota.get("retrying")
+                    else "Quota · manual resume"
+                    if quota["retry_at"] is None
+                    else "Quota · cooldown"
+                )
+            elif runtime.get("error"):
                 status = "Unavailable"
             elif turn:
                 if turn.get("turn_id") in self.idle:
@@ -411,6 +427,17 @@ class RoomView:
                 error = self.state.get("runtimes", {}).get(name, {}).get("error")
                 if error:
                     page.block("Needs attention", error, "class:warning")
+                quota = self.state.get("quotas", {}).get(name)
+                if quota:
+                    when = quota["retry_at"]
+                    retry = (
+                        "No automatic retry. Use /resume or /retry after resolving the limit."
+                        if when is None
+                        else "Retry due: "
+                        + datetime.fromtimestamp(when).astimezone().isoformat()
+                        + " (deferred while paused)."
+                    )
+                    page.block("Usage limit", quota["error"] + "\n" + retry, "class:warning")
             page.block("Execution permissions", self.permissions())
             page.add(f"Completed turns: {self.state.get('turns', 0)} · no round limit")
         elif view == "help":
@@ -757,7 +784,9 @@ class TeamUI:
                     ("class:muted", "  ·  "),
                     (self.model.speaker_style(name), clean(name)),
                     (
-                        "class:warning" if status == "Unavailable" else "class:muted",
+                        "class:warning"
+                        if status == "Unavailable" or "quota" in status.lower()
+                        else "class:muted",
                         " " + status.lower(),
                     ),
                 ]
