@@ -48,12 +48,12 @@ class Member:
 
 class ChatRoom(Room):
     def __init__(self, config, store, broadcast, adapters=None):
-        super().__init__(config, store, broadcast, adapters)
         if adapters is None:
-            self.adapters = {
+            adapters = {
                 a.name: make_resident(a, config.workspace, permission_mode=config.permission_mode)
                 for a in config.agents
             }
+        super().__init__(config, store, broadcast, adapters)
         self.members = {a.name: Member() for a in config.agents}
         self.members["system"] = Member()
         self.writer: str | None = None
@@ -144,7 +144,7 @@ class ChatRoom(Room):
             raise ValueError("Redirect requires nonempty guidance")
         self.cancel_active()
         if self.workflow:
-            candidate = Workflow(self.config, self.workflow.snapshot())
+            candidate = self.workflow.clone()
             candidate.reconsider(speaker=speaker, reason=text.strip())
             candidate.data["chat_epoch"] = candidate.data.get("chat_epoch", 0) + 1
             self.workflow = candidate
@@ -217,7 +217,7 @@ class ChatRoom(Room):
         head, fence = self.messages[-1]["id"], self.fence()
         if member.active or member.error or (not force and member.seen == (head, fence, lane)):
             return False
-        flow = Workflow(self.config, self.workflow.snapshot()) if self.workflow else None
+        flow = self.workflow.clone() if self.workflow else None
         turn = Turn(name, phase, lane, head, fence, flow)
         member.active = turn
         if phase in {"implementation", "verification"} and lane == "work":
@@ -250,7 +250,7 @@ class ChatRoom(Room):
             )
         )
         if agreeing and not work:
-            candidate = Workflow(self.config, self.workflow.snapshot())
+            candidate = self.workflow.clone()
             candidate.data["phase"] = phase = "implementation"
             record = candidate.confirm_consensus()
             self.messages.append(
@@ -292,12 +292,7 @@ class ChatRoom(Room):
                 if phase == "verification":
                     self.launch("system", phase, "work")
                 else:
-                    preferred = self.workflow.choose(self.cursor)
-                    eligible = [preferred] + [n for n in self.adapters if n != preferred]
-                    for name in eligible:
-                        if not self.members[name].error:
-                            self.launch(name, phase, "work")
-                            break
+                    self.launch(self.workflow.choose(self.cursor), phase, "work")
             primary = {self.writer} if self.writer else set()
         else:
             # Drain formal readers of the previous checkpoint before starting the next
@@ -524,7 +519,7 @@ class ChatRoom(Room):
                     ):
                         reply, action = PASS, None
                     else:
-                        candidate = Workflow(self.config, self.workflow.snapshot())
+                        candidate = self.workflow.clone()
                         note = candidate.apply(turn.speaker, action)
                         if action["action"] in {
                             "propose",

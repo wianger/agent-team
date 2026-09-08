@@ -59,6 +59,18 @@ class WorkflowTests(unittest.TestCase):
         self.flow.apply("a", {"action": "approve", "version": 1})
         self.flow.apply("b", {"action": "approve", "version": 1})
 
+    def test_clone_preserves_state_without_sharing_mutable_data(self):
+        self.agree()
+        cloned = self.flow.clone()
+        self.assertEqual(cloned.snapshot(), self.flow.snapshot())
+        self.assertIs(cloned.config, self.config)
+        cloned.data["proposal"]["tasks"][0]["depends_on"].append("new-dependency")
+        cloned.data["approvals"].clear()
+        cloned.members.append("new-member")
+        self.assertEqual(self.flow.data["proposal"]["tasks"][0]["depends_on"], [])
+        self.assertEqual(set(self.flow.data["approvals"]), {"a", "b"})
+        self.assertEqual(self.flow.members, ["a", "b"])
+
     def complete_tasks(self):
         for owner, task_id in (("a", "code"), ("b", "docs")):
             filename = task_id + ".txt"

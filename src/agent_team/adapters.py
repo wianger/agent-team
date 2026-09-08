@@ -219,8 +219,6 @@ class EventDecoder:
             if kind == "turn.completed":
                 self.complete = True
         elif self.backend == "claude":
-            if event.get("parent_tool_use_id"):
-                return ""
             if kind == "stream_event":
                 part = event.get("event", {}).get("delta", {})
                 if part.get("type") == "text_delta":
@@ -284,6 +282,22 @@ async def terminate_process(process: asyncio.subprocess.Process) -> None:
         await process.wait()
 
 
+async def drain_and_terminate(process: asyncio.subprocess.Process) -> None:
+    """Stop an owned process group after its original output readers have been cancelled."""
+
+    async def discard(reader):
+        while await reader.read(65_536):
+            pass
+
+    drains = [asyncio.create_task(discard(r)) for r in (process.stdout, process.stderr)]
+    try:
+        await terminate_process(process)
+    finally:
+        for task in drains:
+            task.cancel()
+        await asyncio.gather(*drains, return_exceptions=True)
+
+
 class CLIAdapter:
     supports_activity = True
 
@@ -327,9 +341,7 @@ class CLIAdapter:
                 start_new_session=True,
             )
         except FileNotFoundError as exc:
-            raise AdapterError(
-                f"Cannot find {command_for(self.agent)[0]}; install it and sign in first"
-            ) from exc
+            raise AdapterError(f"Cannot find {command[0]}; install it and sign in first") from exc
         assert process.stdin and process.stdout and process.stderr
         stderr_output = bytearray()
 
@@ -391,20 +403,7 @@ class CLIAdapter:
                 task.cancel()
             await asyncio.gather(stdin_task, stderr_task, return_exceptions=True)
 
-            async def discard(reader: asyncio.StreamReader) -> None:
-                while await reader.read(65_536):
-                    pass
-
-            drains = [
-                asyncio.create_task(discard(process.stdout)),
-                asyncio.create_task(discard(process.stderr)),
-            ]
-            try:
-                await terminate_process(process)
-            finally:
-                for task in drains:
-                    task.cancel()
-                await asyncio.gather(*drains, return_exceptions=True)
+            await drain_and_terminate(process)
 
 
 class MockAdapter:

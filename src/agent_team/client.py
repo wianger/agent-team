@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .server import connect, encode, receive
 from .streams import readline
-from .workflow import PHASES, visible_text
+from .workflow import PHASES
 
 HELP = """Type a message to participate.
 /pause          Pause after all active replies finish
@@ -33,21 +33,6 @@ Any failed team call pauses the whole room and interrupts its active turns.
 Resolve the issue and wait for active turns to stop, then /retry [agent] or /resume.
 Legacy serial mode still interrupts on ordinary human messages. Use /resume after a manual pause.
 """
-REASONS = {
-    "waiting": "Waiting for an idea",
-    "running": "Running",
-    "restart": "History recovered; /resume to continue",
-    "user": "Paused",
-    "step_complete": "Single turn complete",
-    "error": "Team paused after a failed call; resolve the issue and /resume",
-    "all_passed": "All agents yielded; waiting for human input",
-    "no_consensus": "All agents yielded without consensus; add guidance or /resume",
-    "blocked": "Waiting for human input",
-    "completed": "Work and acceptance checks completed",
-    "waiting_messages": "Members are listening for new messages",
-    "degraded": "A member is unavailable; resolve the issue and use /retry",
-    "document_error": "Consensus document needs attention; resolve the path and /resume",
-}
 
 
 def clean(text: str) -> str:
@@ -99,14 +84,6 @@ class LiveReplies:
             self.turns[identifier] = (event["speaker"], text + event["text"])
         elif kind in {"message", "turn.finished", "floor.released"}:
             self.turns.pop(identifier, None)
-
-    def render(self):
-        return (
-            "\n\n".join(
-                f"{name} › {clean(visible_text(text))}" for name, text in self.turns.values()
-            )
-            or "Listening for the next contribution"
-        )
 
 
 def describe_sessions(state: dict) -> str:
@@ -190,12 +167,6 @@ def describe_workflow(state: dict | None) -> str:
     return "\n".join(lines) + "\n"
 
 
-async def event_stream(reader: asyncio.StreamReader, welcome: dict):
-    yield welcome
-    while True:
-        yield await receive(reader)
-
-
 async def plain_chat(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter, welcome: dict
 ) -> None:
@@ -206,8 +177,10 @@ async def plain_chat(
     )
 
     async def output() -> None:
-        async for event in event_stream(reader, welcome):
+        event = welcome
+        while True:
             print(json.dumps(event, ensure_ascii=False), flush=True)
+            event = await receive(reader)
 
     async def inputs() -> None:
         while raw := await readline(pipe_reader):
@@ -236,20 +209,6 @@ async def plain_chat(
         transport.close()
 
 
-async def terminal_chat(
-    reader: asyncio.StreamReader,
-    writer: asyncio.StreamWriter,
-    name: str,
-    welcome: dict,
-    *,
-    session: Path | None = None,
-    stop_on_exit: bool = False,
-) -> None:
-    from .tui import TeamUI
-
-    await TeamUI(name, session=session, stop_on_exit=stop_on_exit).run(reader, writer, welcome)
-
-
 async def chat(
     session: Path, name: str, plain: bool = False, *, stop_on_exit: bool = False
 ) -> None:
@@ -261,8 +220,10 @@ async def chat(
         if plain or not sys.stdin.isatty() or not sys.stdout.isatty():
             await plain_chat(reader, writer, hello)
         else:
-            await terminal_chat(
-                reader, writer, name, hello, session=session, stop_on_exit=stop_on_exit
+            from .tui import TeamUI
+
+            await TeamUI(name, session=session, stop_on_exit=stop_on_exit).run(
+                reader, writer, hello
             )
     finally:
         writer.close()

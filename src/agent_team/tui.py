@@ -31,7 +31,6 @@ from prompt_toolkit.widgets import TextArea
 
 from .client import (
     HELP,
-    REASONS,
     LiveReplies,
     clean,
     describe_sessions,
@@ -235,8 +234,6 @@ class RoomView:
             )
         if self.state.get("paused") and reason != "waiting":
             return "Pausing · active turns are finishing" if self.turns else "Paused · " + label
-        if reason == "degraded":
-            return label + " · a member needs attention"
         if not self.messages and not self.state.get("messages"):
             return "Ready for your idea"
         if workflow.get("proposal"):
@@ -272,10 +269,6 @@ class RoomView:
             if self.turns:
                 return "Waiting for active turns to finish. /interrupt cancels them immediately."
             return "Messages do not resume a paused team. Use /resume when you are ready."
-        if reason == "degraded":
-            return "Member unavailable. Check Activity; /retry <agent> after resolving it."
-        if reason in {"blocked", "error", "no_consensus", "all_passed", "restart"}:
-            return REASONS[reason]
         if not self.messages and not self.state.get("messages"):
             return "Send your idea to start discussion automatically. Work follows agreement."
         if self.state.get("interaction_mode") == "serial":
@@ -531,7 +524,7 @@ class TeamUI:
 
         @bindings.add("c-c")
         def interrupt(event):
-            self.interrupt_or_leave()
+            self.leave("Ctrl-C")
 
         @bindings.add("c-d")
         def leave(event):
@@ -547,22 +540,15 @@ class TeamUI:
                 self.show("conversation")
             event.app.layout.focus(self.input)
 
-        @bindings.add(
-            "?",
-            filter=Condition(
-                lambda: not self.input.text and self.application.layout.has_focus(self.input)
-            ),
-        )
-        def shortcuts(event):
-            self.show("conversation" if self.view == "help" else "help")
-
-        @bindings.add("c-o")
-        def activity(event):
-            self.show("conversation" if self.view == "activity" else "activity")
-
-        @bindings.add("c-t")
-        def plan(event):
-            self.show("conversation" if self.view == "plan" else "plan")
+        for key, view in (("?", "help"), ("c-o", "activity"), ("c-t", "plan")):
+            bindings.add(
+                key,
+                filter=Condition(
+                    lambda: not self.input.text and self.application.layout.has_focus(self.input)
+                )
+                if key == "?"
+                else True,
+            )(lambda event, view=view: self.show("conversation" if self.view == view else view))
 
         @bindings.add("pageup")
         @bindings.add("pagedown")
@@ -718,7 +704,7 @@ class TeamUI:
             or self.model.notice
             or state.get("paused")
             and reason != "waiting"
-            or reason in {"completed", "blocked", "error", "degraded", "document_error"}
+            or reason in {"completed", "blocked", "error", "document_error"}
             or state.get("interaction_mode") == "serial"
             and state.get("messages")
         )
@@ -773,7 +759,7 @@ class TeamUI:
                 return "  Enter sends your idea and starts discussion."
             if reason == "completed":
                 return "  Completed · F3 Plan for results."
-            if reason in {"blocked", "error", "degraded"}:
+            if reason in {"blocked", "error"}:
                 return "  Needs attention · read messages and /activity."
             if self.model.state.get("paused"):
                 return "  Paused · /resume to continue."
@@ -899,22 +885,14 @@ class TeamUI:
             self.model.turns or state.get("active_turns") or state.get("active")
         )
 
-    def interrupt_or_leave(self):
-        if self.exiting or self.confirm_leave == "Ctrl-C":
+    def leave(self, key="Ctrl-D"):
+        active = key == "Ctrl-C" and self.active_work()
+        if self.exiting or self.confirm_leave == key:
             self.request_exit()
-        elif self.active_work() or self.input.text.strip():
-            if self.active_work():
+        elif active or self.input.text.strip() or (key == "Ctrl-D" and self.stop_on_exit):
+            if active:
                 self.pending.put_nowait("/interrupt")
-            self.confirm_leave = "Ctrl-C"
-            self.application.invalidate()
-        else:
-            self.request_exit()
-
-    def leave(self):
-        if self.exiting or self.confirm_leave == "Ctrl-D":
-            self.request_exit()
-        elif self.stop_on_exit or self.input.text.strip():
-            self.confirm_leave = "Ctrl-D"
+            self.confirm_leave = key
             self.application.invalidate()
         else:
             self.request_exit()

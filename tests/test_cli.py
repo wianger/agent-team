@@ -178,9 +178,9 @@ class ConfigurationTests(unittest.TestCase):
             replies.update({"type": "turn.started", "turn_id": turn, "speaker": speaker})
         for turn, speaker, text in (("1", "a", "A"), ("2", "b", "B"), ("1", "a", " again")):
             replies.update({"type": "delta", "turn_id": turn, "speaker": speaker, "text": text})
-        self.assertEqual(replies.render(), "a › A again\n\nb › B")
+        self.assertEqual(replies.turns, {"1": ("a", "A again"), "2": ("b", "B")})
         replies.update({"type": "message", "turn_id": "2"})
-        self.assertEqual(replies.render(), "a › A again")
+        self.assertEqual(replies.turns, {"1": ("a", "A again")})
         replies.update({"type": "turn.finished", "turn_id": "1"})
         self.assertFalse(replies.turns)
 

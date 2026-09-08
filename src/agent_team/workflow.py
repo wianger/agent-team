@@ -159,6 +159,9 @@ class Workflow:
     def snapshot(self) -> dict:
         return copy.deepcopy(self.data)
 
+    def clone(self) -> Workflow:
+        return Workflow(self.config, self.data)
+
     def reconsider(self, *, speaker: str = "user", reason: str = "Reconsider the plan") -> None:
         if self.data["proposal"]:
             self.data["revision_base"] = {
@@ -259,7 +262,7 @@ class Workflow:
 
     def apply(self, speaker: str, action: dict | None) -> str:
         """Malformed or stale actions never partly change state."""
-        candidate = Workflow(self.config, self.data)
+        candidate = self.clone()
         note = candidate._apply(speaker, action)
         self.data = candidate.data
         return note

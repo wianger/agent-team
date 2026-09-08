@@ -179,7 +179,7 @@ class Room:
         self.cancel_active()
         data = {}
         if self.workflow:
-            candidate = Workflow(self.config, self.workflow.snapshot())
+            candidate = self.workflow.clone()
             candidate.reconsider(speaker=speaker, reason=text.strip())
             data["workflow"] = candidate.snapshot()
         self.messages.append(
@@ -358,7 +358,7 @@ class Room:
         note = ""
         if self.workflow:
             display, action = parse_action(reply)
-            candidate = Workflow(self.config, self.workflow.snapshot())
+            candidate = self.workflow.clone()
             note = candidate.apply(speaker, action)
             if self.workflow.phase == "discussion" and candidate.phase == "implementation":
                 record = candidate.confirm_consensus()
@@ -401,7 +401,7 @@ class Room:
         )
 
     def accept_verification(self, results: list[dict], turn_id: str) -> None:
-        candidate = Workflow(self.config, self.workflow.snapshot())
+        candidate = self.workflow.clone()
         note = candidate.verified(results)
         details = "\n".join(
             f"{r['command']!r} → exit {r['exit_code']}\n{r['output']}" for r in results

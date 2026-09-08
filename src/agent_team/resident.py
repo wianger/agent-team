@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-from .adapters import AdapterError, EventDecoder, command_for, make_adapter, terminate_process
+from .adapters import AdapterError, EventDecoder, command_for, drain_and_terminate, make_adapter
 from .config import AgentConfig
 from .sessions import session_id as validate_session_id
 from .streams import iter_lines
@@ -147,17 +147,9 @@ class JsonProcess:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-        async def discard(reader):
-            while await reader.read(65_536):
-                pass
-
-        drains = [asyncio.create_task(discard(r)) for r in (process.stdout, process.stderr)]
         try:
-            await terminate_process(process)
+            await drain_and_terminate(process)
         finally:
-            for task in drains:
-                task.cancel()
-            await asyncio.gather(*drains, return_exceptions=True)
             for future in self.pending.values():
                 if not future.done():
                     future.set_exception(AdapterError("Resident connection stopped"))
