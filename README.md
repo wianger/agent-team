@@ -17,8 +17,18 @@ For real work, install and sign in to both `claude` and `codex`. Set `workspace`
 
 ```bash
 uv run agent-team doctor
-uv run agent-team start
+uv run agent-team
 ```
+
+`agent-team` without a subcommand initializes and starts the interactive team, just like `agent-team start`. Once installed, run it directly in your project directory, including on the first launch:
+
+```bash
+agent-team
+```
+
+No preliminary `init` is required. When no `--config` is supplied and the current directory has no `team.toml`, interactive startup creates the default configuration atomically, then opens the room. The defaults use the current project as the workspace, Claude and Codex in chatroom/full-auto mode, and `.agent-team/default` for history. No model is called until you send an idea or explicitly resume work. Existing configuration is reused without rewriting it; malformed files and dangling configuration symlinks are not silently replaced.
+
+Startup options also work without `start`, for example `agent-team --session .agent-team/default --name user`. An explicit `--config /path/to/team.toml` must refer to an existing file; misspelled paths do not create new configurations. `--help`, `--version`, and `doctor` never initialize anything. `serve` retains its requirement for an existing configuration. A recovered session still starts paused: use `/resume` to continue it.
 
 Once all agents agree, build mode automatically allows implementation and executes the agreed checks. No extra human approval step is required. Calls use each CLI's local authentication and account quota; omitted models use the CLI defaults. `doctor` checks configuration and executables, not account access or quota.
 
@@ -32,7 +42,7 @@ uv run agent-team join --name observer
 
 The default session directory is `.agent-team/default` under your current directory. From elsewhere, supply its absolute path with `--session /path/to/.agent-team/default`.
 
-`start` runs the server and your terminal together; leaving stops that server and disconnects its clients, but retains history. For unattended work, run the server independently and participate through `join`:
+`agent-team` (or `agent-team start`) runs the server and your terminal together; leaving stops that server and disconnects its clients, but retains history. For unattended work, run the server independently and participate through `join`:
 
 ```bash
 # Terminal 1
@@ -43,7 +53,7 @@ uv run agent-team join
 
 Leaving `join` (including `/quit`, Ctrl-D, or a connection loss) does not pause or interrupt the team, even when no humans remain online. Discussion, implementation, peer judgment, and acceptance checks continue; reconnect with `join` to see the current state and all committed history. Keep the `serve` process running: it is a foreground server, not a detached daemon. Stopping it with Ctrl-C or SIGTERM shuts down the room and cancels active work.
 
-Use `agent-team init` to create a configuration in a new directory.
+`agent-team init` remains available if you want to create and edit a configuration before starting; it is optional for interactive startup.
 
 ## How collaboration works
 
@@ -84,6 +94,33 @@ New messages are broadcast to clients immediately and retained for every member.
 
 Set `interaction_mode = "serial"` for the previous single-floor scheduler. Configurations that omit this key retain serial behavior; the checked-in configuration, `init` template, and interactive `demo` use chatroom mode.
 
+## Living agreements and consensus documents
+
+In build mode, each unanimously confirmed proposal becomes a Markdown document before implementation starts:
+
+```text
+docs/agent-team/<room-id>/consensus-v0001.md
+docs/agent-team/<room-id>/consensus-v0002.md
+```
+
+Paths are relative to the team's workspace. A stable, generated room ID separates documents from different sessions. The version is the proposal version, so rejected drafts can leave gaps in the document numbers. `/consensus` shows the latest approved record, its document path, and previous versions; `/plan` also links the agreement to current work.
+
+The coordinator renders the actual approved scope, acceptance criteria, shared milestones, check commands, and approving members. It does not ask another model to summarize or invent agreement. In chatroom mode, outstanding formal discussion must finish before agreement is confirmed, so a pending objection cannot produce an approved document. A manual pause still allows finishing discussion to produce its document, but does not start implementation.
+
+Agreements remain revisable. Ordinary chat adds context; use an explicit revision request to stop current work and reconsider:
+
+```text
+/revise Keep the public API, but reconsider persistence for offline use.
+```
+
+`/revise` is an alias for `/redirect`. A member may also submit `request_revision` with the current proposal version and a concrete reason, including from the conversation lane. This request cannot approve a plan or judge code. Active work is revoked; the coordinator waits for a cancelled writer/check runner to finish before starting new formal readers.
+
+The previous agreement, documents, code, contributions, checkpoint, and check results remain available. `revision_base` preserves the pre-revision working state for discussion. Agents propose a new version, explain what changes and what remains valid, and obtain fresh approval from every member. Existing artifacts can be reused, but old approvals and completed milestone states are not automatically transferred to a revised plan. After renewed consensus, a new document records the reason for revision and links the preceding version. Work can also be reopened after completion.
+
+Documents are generated snapshots, not files to edit directly to change team authority. Earlier versions remain historical records; the room identifies the active agreement or pending revision. The public SQLite workflow is authoritative. Document publication is atomic and does not overwrite different existing content or follow symlinks in the generated path. If publication fails, implementation pauses with `document_error`; resolve the filesystem issue and `/resume`. The approved record is retained, and the model approval turn is not replayed.
+
+After an upgrade/restart, previously confirmed agreements can be recovered from the durable workflow history, including agreements preceding a reopened discussion. Missing documents are recreated without model calls. Recovery still starts paused. This is a server feature: a new terminal alone cannot enable it on an already-running older server. It does not change `serve`/`join` ownership or automatically restart your team.
+
 ## No round or output limits
 
 The application imposes no conversation-round budget, output-length limit, message-length limit, or shared-context character limit. It does not truncate prompts, public messages, terminal history, CLI error diagnostics, or acceptance-check output. Large JSONL frames are read incrementally without a fixed frame-length cap. Joining replays the complete committed conversation.
@@ -98,7 +135,29 @@ After 120 seconds without observable output, the terminal shows a waiting notice
 
 ## Participate from the CLI
 
-Type ordinary text to speak; humans do not need the floor. The terminal separates committed history from the live reply, while keeping the input editable. PgUp/PgDn scroll history; Tab completes commands.
+Type ordinary text to speak; humans do not need the floor. A new room opens with an idea prompt: send your goal, constraints, and acceptance criteria to start discussion automatically. A recovered or manually paused room clearly asks for `/resume` instead.
+
+The terminal takes inspiration from [Claude Code's terminal interaction](https://code.claude.com/docs/en/interactive-mode): a conversation-first layout, a simple `❯` prompt between thin rules, warm accent colors, and commands revealed when needed. The main surface follows your terminal's background instead of painting a dashboard. There are no permanent navigation tabs; the phase and member states sit near the composer. Guidance appears when there is something to act on, such as a pause, error, or disconnect.
+
+Committed messages use compact speaker markers; each member's streaming reply remains separate and is labeled `live · not published`. Successful publication replaces that draft with a committed message. A conversation-only member is labeled as chatting, not writing, even while another member implements. Private reasoning and raw tool output are not shown. Names have consistent colors without assigning fixed roles.
+
+Open details only when you need them:
+
+- `/chat` or **F2**: public messages and live drafts.
+- `/plan`, `/tasks`, or **Ctrl-T / F3**: the current proposal, votes, milestones, judgments, and checks.
+- `/consensus`: approved documents and version history.
+- `/activity` or **Ctrl-O / F4**: operational notices and complete error details, kept out of the main conversation.
+- `/help`, **F1**, or **? on empty input**: shortcuts and command explanations. `/status` and `/sessions` open dedicated detail views.
+
+Ctrl-O and Ctrl-T toggle their detail views; Escape dismisses suggestions first, then returns from a detail view to the conversation. Navigation preserves your draft and never interrupts the team. Question marks in an existing draft remain ordinary text. `/chat` and `/activity` are terminal-only actions; `--plain` keeps its existing line-input/JSONL protocol. Activity contains events received by this terminal, not a replay of all past operational events; the complete durable log remains available through `agent-team history --json`.
+
+**Enter sends the entire draft. Alt+Enter or Ctrl-J inserts a newline.** The composer starts at one row and grows with wrapped or multiline text, using fewer rows in small terminals. Bracketed multiline paste stays in the editor until you explicitly send it. Type `/` to open action suggestions with descriptions; Tab and Shift-Tab select a suggestion. When a suggestion is selected, Enter accepts the completion first, and another Enter executes it. Invalid commands remain editable instead of losing the draft.
+
+**PgUp/PgDn and mouse scrolling hold a stable reading snapshot.** New messages and streaming updates remain in memory without moving your view; a notice counts new committed messages. Ctrl-End or F2 returns to the latest conversation. This is a viewport choice, not truncation: no message or draft length budget is introduced. Long input also scrolls within the composer without a text-length cap.
+
+Disconnecting leaves the visible conversation and unsent draft available, but disables sending; leave and rejoin to reconnect. Requests with uncertain delivery are retained in Activity and are never automatically replayed. Drafts and transient activity are local to the client and are not saved across closing it. Ctrl-D asks for confirmation when a draft would be discarded; an interactive `start` or `demo` also confirms before leaving because it owns and stops the server. `join` still leaves the team running. Ctrl-C retains its explicit meaning: interrupt the team and pause.
+
+The visual reference does not change permissions or team control: Escape never interrupts agents, and Shift-Tab never changes permission mode. These remain agent-team's own controls, not a copy of every Claude Code binding.
 
 | Command | Effect |
 | --- | --- |
@@ -107,11 +166,13 @@ Type ordinary text to speak; humans do not need the floor. The terminal separate
 | `/resume` | Continue automatically without a round budget |
 | `/retry [agent]` | In chatroom mode, retry one unavailable member or all members; no silent retry loop |
 | `/redirect text` | Revoke active turns and reopen planning with explicit new guidance |
+| `/revise text` | Reopen the agreement for discussion, preserving old records and existing work |
 | `/next [agent]` | Advance one eligible agent turn; authors cannot judge themselves |
 | `/status` | Show phase, active thinkers, writer, runtime failures, and turn count |
 | `/sessions` | Show private session IDs, acknowledged public-message cursors, and uncertain turns |
 | `/reset-session [agent]` | While idle, discard one or all private-session references and pause; preserve public history and files |
 | `/plan`, `/tasks` | Show consensus, shared milestones, contribution revisions, judgments, and checks |
+| `/consensus` | Read the latest approved document, its path, and version history |
 | `/history [id]` | Read a page of 100 messages after an event ID; paging does not truncate messages |
 | `/quit` or Ctrl-D | Leave this terminal |
 
@@ -229,6 +290,6 @@ These automation scripts use their own finite test budgets, independent of the u
 
 `uv run python scripts/smoke_resident.py` verifies private memory and the same live process/session across two native invocations. `--backend claude --check-write-guard` also exercises a denied native Write call in a temporary workspace. These checks consume account quota, preserve provider transcripts, and close their own resident process groups afterward.
 
-Code entry points: `chatroom.py` handles independent workers and write leases; `resident.py` handles bidirectional native connections; `workflow.py` handles consensus and reciprocal judgment; `engine.py` retains the serial scheduler; `verification.py` executes checks; `adapters.py` handles serial/custom CLIs; `sessions.py` manages private context; `server.py` handles rooms and locks; `client.py` provides the terminal.
+Code entry points: `chatroom.py` handles independent workers and write leases; `resident.py` handles bidirectional native connections; `workflow.py` handles consensus and reciprocal judgment; `engine.py` retains the serial scheduler; `verification.py` executes checks; `adapters.py` handles serial/custom CLIs; `sessions.py` manages private context; `server.py` handles rooms and locks; `client.py` handles client transport and plain mode; `tui.py` provides the terminal presentation and keyboard interaction.
 
 Integration references: [Codex App Server](https://learn.chatgpt.com/docs/app-server), [Codex noninteractive mode](https://learn.chatgpt.com/docs/non-interactive-mode), [Claude streaming CLI](https://code.claude.com/docs/en/cli-reference), [Claude tool hooks](https://code.claude.com/docs/en/agent-sdk/hooks), [Claude control protocol source](https://github.com/anthropics/claude-agent-sdk-python/blob/main/src/claude_agent_sdk/_internal/query.py).
