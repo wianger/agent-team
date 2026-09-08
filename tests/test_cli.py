@@ -1,17 +1,71 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import signal
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import chdir, redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
+from agent_team.cli import create_config, load_team_config, main, parse_args
 from agent_team.client import LiveReplies, parse_input
 from agent_team.config import DEFAULT_CONFIG, AgentConfig, TeamConfig, demo_config, load_config
 from agent_team.store import read_events
+
+
+class ArgumentTests(unittest.TestCase):
+    def test_no_arguments_match_explicit_start_defaults(self):
+        self.assertEqual(parse_args([]), parse_args(["start"]))
+        self.assertEqual(parse_args([]).command, "start")
+
+    def test_implicit_start_accepts_options_without_changing_the_argument_list(self):
+        arguments = [
+            "--config",
+            "project settings.toml",
+            "--session",
+            "join",
+            "--name",
+            "observer",
+            "--plain",
+        ]
+        original = arguments.copy()
+        self.assertEqual(parse_args(arguments), parse_args(["start", *arguments]))
+        self.assertEqual(arguments, original)
+        self.assertEqual(parse_args(arguments).session, Path("join"))
+
+    def test_existing_subcommands_keep_their_meaning(self):
+        for command in ("init", "start", "serve", "join", "demo", "doctor", "history"):
+            with self.subTest(command=command):
+                self.assertEqual(parse_args([command]).command, command)
+
+    def test_help_and_version_remain_top_level_actions(self):
+        for option, expected in (("--help", "Run without a command"), ("--version", "agent-team")):
+            with self.subTest(option=option), redirect_stdout(io.StringIO()) as output:
+                with self.assertRaises(SystemExit) as caught:
+                    parse_args([option])
+                self.assertEqual(caught.exception.code, 0)
+                self.assertIn(expected, output.getvalue())
+
+    def test_unknown_commands_and_options_are_not_treated_as_ideas(self):
+        for arguments in (["strat"], ["--unknown"], ["--name", "user", "unexpected"]):
+            with self.subTest(arguments=arguments), redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as caught:
+                    parse_args(arguments)
+                self.assertEqual(caught.exception.code, 2)
+
+    def test_entrypoint_with_no_arguments_runs_interactive_start(self):
+        with (
+            patch.object(sys, "argv", ["agent-team"]),
+            patch("agent_team.cli.run", new_callable=AsyncMock) as run,
+        ):
+            main()
+        run.assert_awaited_once_with(parse_args(["start"]))
 
 
 class ConfigurationTests(unittest.TestCase):
@@ -131,7 +185,204 @@ class ConfigurationTests(unittest.TestCase):
         self.assertFalse(replies.turns)
 
 
+class BootstrapTests(unittest.TestCase):
+    def test_bare_entrypoint_initializes_and_enters_the_chat_without_model_calls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            with (
+                chdir(path),
+                patch.object(sys, "argv", ["agent-team"]),
+                patch("agent_team.cli.chat", new_callable=AsyncMock) as chat,
+                patch(
+                    "agent_team.resident.JsonProcess.start_process", new_callable=AsyncMock
+                ) as native,
+            ):
+                main()
+            chat.assert_awaited_once_with(
+                path / ".agent-team/default", "user", False, stop_on_exit=True
+            )
+            native.assert_not_awaited()
+            self.assertEqual((path / "team.toml").read_text(), DEFAULT_CONFIG)
+            self.assertEqual(load_config(path / "team.toml").workspace, path)
+            self.assertFalse((path / ".agent-team/default/connection.json").exists())
+
+    def test_existing_configuration_is_never_replaced_or_repaired_automatically(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "team.toml"
+            original = '[team]\nworkflow="discussion"\n[[agents]]\nname="solo"\nbackend="mock"\n'
+            path.write_text(original)
+            modified = path.stat().st_mtime_ns
+            config = load_team_config(path, initialize=True)
+            self.assertEqual(config.agents[0].name, "solo")
+            self.assertEqual(path.read_text(), original)
+            self.assertEqual(path.stat().st_mtime_ns, modified)
+            with self.assertRaises(FileExistsError):
+                create_config(path)
+            self.assertEqual(path.read_text(), original)
+            path.write_text("[broken")
+            with self.assertRaises(ValueError):
+                load_team_config(path, initialize=True)
+            self.assertEqual(path.read_text(), "[broken")
+
+    def test_dangling_config_symlinks_are_preserved_instead_of_creating_their_targets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path, target = Path(directory) / "team.toml", Path(directory) / "missing.toml"
+            path.symlink_to(target)
+            with self.assertRaisesRegex(ValueError, "No team configuration"):
+                load_team_config(path, initialize=True)
+            self.assertTrue(path.is_symlink())
+            self.assertFalse(target.exists())
+            self.assertEqual(list(Path(directory).iterdir()), [path])
+
+    def test_failed_atomic_creation_leaves_no_partial_config_or_temporary_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "team.toml"
+            with patch("agent_team.cli.os.link", side_effect=OSError("Publication failed")):
+                with self.assertRaises(OSError):
+                    load_team_config(path, initialize=True)
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_concurrent_initialization_reads_one_complete_config_without_overwriting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "team.toml"
+            with ThreadPoolExecutor(max_workers=4) as workers:
+                configs = list(
+                    workers.map(lambda _: load_team_config(path, initialize=True), range(8))
+                )
+            self.assertTrue(all(c.workspace == Path(directory) for c in configs))
+            self.assertEqual(path.read_text(), DEFAULT_CONFIG)
+            self.assertEqual(list(Path(directory).iterdir()), [path])
+
+
 class CLISmokeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_project_starts_directly_with_default_agents_and_clean_jsonl(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "agent_team",
+                "--plain",
+                cwd=path,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                async with asyncio.timeout(5):
+                    welcome = json.loads(await process.stdout.readline())
+                    self.assertEqual(welcome["type"], "welcome")
+                    self.assertEqual(welcome["state"]["reason"], "waiting")
+                    self.assertEqual(
+                        [a["backend"] for a in welcome["state"]["agents"]], ["claude", "codex"]
+                    )
+                    self.assertEqual(welcome["state"]["interaction_mode"], "chatroom")
+                    self.assertEqual(welcome["state"]["permission_mode"], "full_auto")
+                    output, errors = await process.communicate(b"/quit\n")
+                    self.assertEqual(process.returncode, 0, errors.decode())
+                    for line in output.splitlines():
+                        self.assertIsInstance(json.loads(line), dict)
+            finally:
+                if process.returncode is None:
+                    process.terminate()
+                    await process.wait()
+            self.assertEqual((path / "team.toml").read_text(), DEFAULT_CONFIG)
+            events = read_events(path / ".agent-team/default/events.sqlite3")
+            self.assertFalse(any(e["type"] in {"turn.started", "floor.granted"} for e in events))
+
+    async def test_implicit_start_creates_and_recovers_a_mock_room_without_rewriting_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            config_path, session = path / "team.toml", path / "session"
+            config_text = (
+                '[team]\nworkflow="discussion"\ninteraction_mode="chatroom"\nturn_delay=0\n'
+                '[[agents]]\nname="member"\nbackend="mock"\n'
+            )
+            config_path.write_text(config_text)
+            for recovered in (False, True):
+                process = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-m",
+                    "agent_team",
+                    "--plain",
+                    "--config",
+                    str(config_path),
+                    "--session",
+                    str(session),
+                    "--name",
+                    "observer",
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                try:
+                    async with asyncio.timeout(10):
+                        greeting = json.loads(await process.stdout.readline())
+                        self.assertEqual(greeting["type"], "welcome")
+                        self.assertEqual(
+                            greeting["state"]["reason"], "restart" if recovered else "waiting"
+                        )
+                        if recovered:
+                            self.assertTrue(greeting["state"]["paused"])
+                            self.assertGreater(greeting["state"]["messages"], 0)
+                        else:
+                            process.stdin.write(b"Discuss a local notes tool.\n")
+                            await process.stdin.drain()
+                            while True:
+                                raw = await process.stdout.readline()
+                                self.assertTrue(raw, "Implicit start unexpectedly exited")
+                                event = json.loads(raw)
+                                if event["type"] == "message" and event["role"] == "agent":
+                                    break
+                        _, errors = await process.communicate(b"/quit\n")
+                        self.assertEqual(process.returncode, 0, errors.decode())
+                finally:
+                    if process.returncode is None:
+                        process.terminate()
+                        await process.wait()
+                self.assertEqual(config_path.read_text(), config_text)
+                self.assertFalse((session / "connection.json").exists())
+            self.assertTrue(
+                any(e.get("speaker") == "observer" for e in read_events(session / "events.sqlite3"))
+            )
+
+    async def test_explicit_missing_config_and_read_only_commands_never_initialize(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            for arguments in (
+                ["--config", "team.toml"],
+                ["--config", "missing.toml"],
+                ["doctor"],
+                ["serve"],
+                ["--help"],
+                ["--version"],
+            ):
+                process = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-m",
+                    "agent_team",
+                    *arguments,
+                    cwd=path,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                try:
+                    async with asyncio.timeout(5):
+                        output, errors = await process.communicate()
+                finally:
+                    if process.returncode is None:
+                        process.terminate()
+                        await process.wait()
+                if arguments in (["--help"], ["--version"]):
+                    self.assertEqual(process.returncode, 0, errors.decode())
+                    self.assertIn(b"agent-team", output)
+                else:
+                    self.assertEqual(process.returncode, 1)
+                    self.assertIn(b"without --config", errors)
+                    self.assertNotIn(b"Traceback", errors)
+                self.assertEqual(await asyncio.to_thread(lambda: list(path.iterdir())), [])
+
     async def test_serve_continues_after_plain_join_eof_and_replays_on_reconnect(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)

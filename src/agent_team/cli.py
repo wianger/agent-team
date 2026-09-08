@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import shutil
 import signal
 import sys
@@ -19,7 +20,10 @@ from .store import read_events
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(
-        description="A shared team room for humans, Claude Code, and Codex"
+        description="A shared team room for humans, Claude Code, and Codex. "
+        "Run without a command to initialize and start an interactive team.",
+        epilog="Startup options can omit 'start': agent-team --config team.toml "
+        "--session .agent-team/default --name user. See 'agent-team start --help' for options.",
     )
     root.add_argument("--version", action="version", version="agent-team 0.1.0")
     commands = root.add_subparsers(dest="command", required=True)
@@ -35,7 +39,13 @@ def parser() -> argparse.ArgumentParser:
     ):
         command = commands.add_parser(name, help=description)
         if name in {"start", "serve", "doctor"}:
-            command.add_argument("--config", type=Path, default=Path("team.toml"))
+            command.add_argument(
+                "--config",
+                type=Path,
+                default=None if name == "start" else Path("team.toml"),
+                help="Use an existing configuration; interactive startup otherwise creates "
+                "team.toml if missing",
+            )
         if name not in {"doctor", "demo"}:
             command.add_argument("--session", type=Path, default=Path(".agent-team/default"))
         if name in {"start", "join", "demo"}:
@@ -50,12 +60,57 @@ def parser() -> argparse.ArgumentParser:
     return root
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if not arguments or (
+        arguments[0].startswith("-") and arguments[0] not in {"-h", "--help", "--version"}
+    ):
+        arguments.insert(0, "start")
+    return parser().parse_args(arguments)
+
+
+def create_config(path: Path) -> None:
+    """Publish a complete default configuration without replacing existing files."""
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=path.parent, prefix=".agent-team-config-", delete=False
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(DEFAULT_CONFIG)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(temporary, path, follow_symlinks=False)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def load_team_config(path: Path, *, initialize=False):
+    if initialize:
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            try:
+                create_config(path)
+            except FileExistsError:
+                pass  # Another invocation published its configuration first; read it as-is.
+    try:
+        return load_config(path)
+    except FileNotFoundError as exc:
+        raise ValueError(
+            f"No team configuration found at {path}. "
+            "Run 'agent-team' without --config to initialize the default configuration, "
+            "or use --config with an existing configuration."
+        ) from exc
+
+
 async def run(args: argparse.Namespace) -> None:
     if args.command == "join":
         await chat(args.session.resolve(), args.name, args.plain)
         return
     if args.command == "doctor":
-        config = load_config(args.config)
+        config = load_team_config(args.config)
         missing = False
         print(f"Python {sys.version.split()[0]} | workspace: {config.workspace}")
         print(f"Team permission mode: {config.permission_mode}")
@@ -72,7 +127,10 @@ async def run(args: argparse.Namespace) -> None:
     config = (
         replace(demo_config(), interaction_mode="chatroom")
         if args.command == "demo"
-        else load_config(args.config)
+        else load_team_config(
+            args.config or Path("team.toml"),
+            initialize=args.command == "start" and args.config is None,
+        )
     )
     # A demo gets an isolated disposable room and cannot mix into a real team's history.
     context = (
@@ -128,12 +186,11 @@ async def run(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    args = parser().parse_args()
+    args = parse_args()
     try:
         if args.command == "init":
-            with args.config.open("x") as handle:
-                handle.write(DEFAULT_CONFIG)
-            print(f"Created {args.config}. Run agent-team doctor, then agent-team start.")
+            create_config(args.config)
+            print(f"Created {args.config}. Run agent-team doctor, then agent-team.")
         elif args.command == "history":
             events = read_events(args.session / "events.sqlite3")
             for event in events:
