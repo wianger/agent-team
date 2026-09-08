@@ -13,7 +13,7 @@ from .workflow import PHASES, visible_text
 
 HELP = """Type a message to participate.
 /pause          Pause after all active replies finish
-/interrupt      Cancel all active turns and pause (Ctrl-C)
+/interrupt      Cancel all active turns and pause without leaving
 /resume         Continue automatically, without a round limit
 /retry [agent]  Retry one unavailable member, or all unavailable members
 /redirect text  Interrupt active work and reopen discussion with new guidance

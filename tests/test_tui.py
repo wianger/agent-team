@@ -290,7 +290,7 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_empty_layout_and_narrow_terminal_keep_the_composer_visible(self):
         frame = screen_text(self.ui)
-        for text in ("✳ agent-team", "What would you like", "Describe your idea", "Ctrl-D Leave"):
+        for text in ("✳ agent-team", "What would you like", "Describe your idea", "Ctrl-C Exit"):
             self.assertIn(text, frame)
         self.assertNotIn("/reset-session", frame)
         self.assertNotIn("F2 Conversation", frame)
@@ -302,7 +302,7 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
         await eventually(lambda: "─" * 50 in screen_text(self.ui))
         frame = screen_text(self.ui)
         self.assertIn("Describe your idea", frame)
-        self.assertIn("Ctrl-D Leave", frame)
+        self.assertIn("Ctrl-C Exit", frame)
         self.assertNotIn("Window too small", frame)
 
     async def test_question_mark_opens_help_only_when_the_composer_is_empty(self):
@@ -476,6 +476,7 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.writer.requests), 1)
 
     async def test_interrupt_keeps_the_draft_and_leave_does_not_send_control(self):
+        self.ui.model.handle(turn())
         self.pipe.send_text("Unfinished idea\x03")
         await eventually(lambda: bool(self.writer.requests))
         self.assertEqual(self.writer.requests, [encode({"type": "control", "action": "interrupt"})])
@@ -495,6 +496,79 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
         self.pipe.send_text("\x04")
         await eventually(lambda: self.task.done())
         self.assertFalse(self.writer.requests)
+
+    async def test_ctrl_c_exits_an_idle_owner_immediately_without_sending_interrupt(self):
+        self.ui.stop_on_exit = True
+        self.pipe.send_text("\x03")
+        await eventually(lambda: self.task.done())
+        self.assertFalse(self.writer.requests)
+
+    async def test_fast_double_ctrl_c_flushes_one_interrupt_before_exiting(self):
+        self.ui.model.handle(turn())
+        self.pipe.send_text("\x03\x03")
+        await eventually(lambda: self.task.done())
+        self.assertEqual(self.writer.requests, [encode({"type": "control", "action": "interrupt"})])
+
+    async def test_idle_draft_requires_confirmation_and_escape_preserves_it(self):
+        self.pipe.send_text("Unsent draft\x03")
+        await eventually(lambda: self.ui.confirm_leave == "Ctrl-C")
+        self.assertFalse(self.task.done())
+        self.assertFalse(self.writer.requests)
+        self.assertIn("Ctrl-C again", self.ui.guidance()[0][1])
+        self.assertEqual(self.ui.input.text, "Unsent draft")
+        self.pipe.send_text("\x1b")
+        await eventually(lambda: self.ui.confirm_leave is None)
+        self.assertEqual(self.ui.input.text, "Unsent draft")
+        self.pipe.send_text("\x03\x03")
+        await eventually(lambda: self.task.done())
+        self.assertFalse(self.writer.requests)
+
+    async def test_editing_after_ctrl_c_cancels_the_old_exit_confirmation(self):
+        self.ui.model.handle(turn())
+        self.pipe.send_text("\x03")
+        await eventually(lambda: self.ui.confirm_leave == "Ctrl-C")
+        self.pipe.send_text("Keep this")
+        await eventually(
+            lambda: self.ui.confirm_leave is None and self.ui.input.text == "Keep this"
+        )
+        self.pipe.send_text("\x03")
+        await eventually(lambda: self.ui.confirm_leave == "Ctrl-C")
+        self.assertFalse(self.task.done())
+        self.assertEqual(self.ui.input.text, "Keep this")
+
+    async def test_disconnected_ctrl_c_ignores_stale_active_turns_and_exits(self):
+        self.ui.model.handle(turn())
+        self.reader.feed_eof()
+        await eventually(lambda: not self.ui.connected)
+        self.pipe.send_text("\x03")
+        await eventually(lambda: self.task.done())
+        self.assertFalse(self.writer.requests)
+
+    async def test_confirmed_exit_finishes_even_if_interrupt_delivery_fails(self):
+        async def fail():
+            raise ConnectionError("Connection dropped")
+
+        self.writer.drain = fail
+        self.ui.model.handle(turn())
+        self.pipe.send_text("\x03\x03")
+        await eventually(lambda: self.task.done())
+        self.assertEqual(len(self.writer.requests), 1)
+        self.assertIn("Delivery not confirmed", self.ui.model.page("activity").text)
+
+    async def test_another_ctrl_c_can_exit_while_the_transport_is_stalled(self):
+        async def stall():
+            await asyncio.Event().wait()
+
+        self.writer.drain = stall
+        self.ui.model.handle(turn())
+        self.pipe.send_text("\x03\x03")
+        await eventually(lambda: self.ui.exiting and bool(self.writer.requests))
+        self.assertFalse(self.task.done())
+        self.assertIn("close immediately", self.ui.guidance()[0][1])
+        self.pipe.send_text("\x03")
+        await eventually(lambda: self.task.done())
+        self.assertEqual(len(self.writer.requests), 1)
+        self.assertIn("Delivery not confirmed", self.ui.model.page("activity").text)
 
     async def test_error_and_status_events_render_without_exposing_event_json(self):
         self.reader.feed_data(
@@ -529,6 +603,35 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LiveRoomTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ctrl_c_from_an_idle_join_client_does_not_stop_or_control_the_server(self):
+        with tempfile.TemporaryDirectory(prefix="agent-team-ui-exit-") as directory:
+            path = Path(directory)
+            server = Server(replace(demo_config(), workspace=path), path / "session")
+            await server.start()
+            writer, task = None, None
+            try:
+                reader, writer = await connect(path / "session", "user")
+                greeting = await receive(reader)
+                with create_pipe_input() as pipe:
+                    ui = TeamUI("user", input=pipe, output=ScreenOutput())
+                    task = asyncio.create_task(ui.run(reader, writer, greeting))
+                    await eventually(lambda: ui.application.is_running)
+                    pipe.send_text("\x03")
+                    await asyncio.wait_for(task, 3)
+                writer.close()
+                await writer.wait_closed()
+                await eventually(lambda: not server.clients)
+                self.assertFalse(server.room.closed)
+                self.assertFalse(any(e["type"] == "room.control" for e in server.store.events()))
+            finally:
+                if task and not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                if writer:
+                    writer.close()
+                    await writer.wait_closed()
+                await server.close()
+
     async def test_tui_works_with_the_existing_server_protocol_and_mock_workflow(self):
         with tempfile.TemporaryDirectory(prefix="agent-team-ui-test-") as directory:
             path = Path(directory)

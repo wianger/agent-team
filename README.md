@@ -155,14 +155,19 @@ Ctrl-O and Ctrl-T toggle their detail views; Escape dismisses suggestions first,
 
 **PgUp/PgDn and mouse scrolling hold a stable reading snapshot.** New messages and streaming updates remain in memory without moving your view; a notice counts new committed messages. Ctrl-End or F2 returns to the latest conversation. This is a viewport choice, not truncation: no message or draft length budget is introduced. Long input also scrolls within the composer without a text-length cap.
 
-Disconnecting leaves the visible conversation and unsent draft available, but disables sending; leave and rejoin to reconnect. Requests with uncertain delivery are retained in Activity and are never automatically replayed. Drafts and transient activity are local to the client and are not saved across closing it. Ctrl-D asks for confirmation when a draft would be discarded; an interactive `start` or `demo` also confirms before leaving because it owns and stops the server. `join` still leaves the team running. Ctrl-C retains its explicit meaning: interrupt the team and pause.
+Disconnecting leaves the visible conversation and unsent draft available, but disables sending; leave and rejoin to reconnect. Requests with uncertain delivery are retained in Activity and are never automatically replayed. Drafts and transient activity are local to the client and are not saved across closing it.
+
+**Ctrl-C exits immediately when there is no active work and no unsent draft**, including at the initial idea prompt. While agents or checks are active, the first Ctrl-C requests interruption and pause; another Ctrl-C confirms exit. An idle unsent draft also requires confirmation, but does not send an interrupt. Escape, editing, or opening another view cancels confirmation without discarding the draft. A rapid double press drains its queued interrupt to the transport before closing; this is not a server acknowledgement. If the transport stalls, another Ctrl-C forces local exit, and delivery may remain uncertain.
+
+Ctrl-D and `/quit` remain available; they confirm before discarding a draft or leaving an owner terminal. Leaving `agent-team`, `start`, or `demo` closes its server and cancels any remaining work. Leaving a `join` client does not stop the server: use Ctrl-D or `/quit` to leave it without interrupting active agents. Use `/interrupt` when you want to cancel and pause without leaving.
 
 The visual reference does not change permissions or team control: Escape never interrupts agents, and Shift-Tab never changes permission mode. These remain agent-team's own controls, not a copy of every Claude Code binding.
 
 | Command | Effect |
 | --- | --- |
 | `/pause` | Finish all active replies, then pause |
-| `/interrupt` or Ctrl-C | Cancel all active turns and their process groups, then pause |
+| `/interrupt` | Cancel all active turns and their process groups, then pause without leaving |
+| Ctrl-C | Exit if idle with no draft; otherwise interrupt active work or protect the draft, then press again to exit |
 | `/resume` | Continue automatically without a round budget |
 | `/retry [agent]` | In chatroom mode, retry one unavailable member or all members; no silent retry loop |
 | `/redirect text` | Revoke active turns and reopen planning with explicit new guidance |

@@ -416,8 +416,13 @@ class RoomView:
                 "Ctrl-End              Return to the latest conversation\n"
                 "F2 / F3 / F4 / F1     Conversation / Plan / Activity / Help\n"
                 "Escape                Dismiss suggestions or return to the conversation\n"
-                "Ctrl-C                Interrupt the team and pause\n"
+                "Ctrl-C                Exit when idle; interrupt active work, "
+                "then press again to exit\n"
                 "Ctrl-D                Leave this terminal\n\n"
+                "An unsent draft needs a second Ctrl-C to confirm leaving.\n"
+                "Escape or editing cancels confirmation without discarding the draft.\n"
+                "Use /interrupt to pause without leaving. Use Ctrl-D or /quit to leave a join "
+                "client without interrupting the team.\n\n"
                 "Multiline bracketed paste stays in the editor until you press Enter.\n"
                 "While reading history, new output is retained without moving your view.",
             )
@@ -456,12 +461,13 @@ class TeamUI:
         self.session = session
         self.stop_on_exit = stop_on_exit
         self.connected = True
-        self.confirm_leave = False
+        self.confirm_leave: str | None = None
+        self.exiting = False
         self.view = "conversation"
         self.follow = True
         self.read_at = 0
         self.painted = None
-        self.pending: asyncio.Queue[str] = asyncio.Queue()
+        self.pending: asyncio.Queue[str | None] = asyncio.Queue()
         self.lexer = PageLexer()
         self.body = TextArea(
             read_only=True,
@@ -473,6 +479,7 @@ class TeamUI:
         )
         self.input = TextArea(
             multiline=True,
+            read_only=Condition(lambda: self.exiting),
             height=lambda: Dimension(
                 min=1, max=min(6, max(1, self.application.output.get_size().rows // 4))
             ),
@@ -492,7 +499,7 @@ class TeamUI:
                 )
             ],
         )
-        self.input.buffer.on_text_changed += lambda _: setattr(self, "confirm_leave", False)
+        self.input.buffer.on_text_changed += lambda _: setattr(self, "confirm_leave", None)
         bindings = KeyBindings()
 
         @bindings.add("enter", eager=True)
@@ -503,13 +510,13 @@ class TeamUI:
         @bindings.add("escape", "enter")
         @bindings.add("c-j")
         def newline(event):
-            event.app.layout.focus(self.input)
-            self.input.buffer.insert_text("\n")
+            if not self.exiting:
+                event.app.layout.focus(self.input)
+                self.input.buffer.insert_text("\n")
 
         @bindings.add("c-c")
         def interrupt(event):
-            if self.connected:
-                self.pending.put_nowait("/interrupt")
+            self.interrupt_or_leave()
 
         @bindings.add("c-d")
         def leave(event):
@@ -517,7 +524,7 @@ class TeamUI:
 
         @bindings.add("escape")
         def escape(event):
-            self.confirm_leave = False
+            self.confirm_leave = None
             self.model.notice = ""
             if self.input.buffer.complete_state:
                 self.input.buffer.cancel_completion()
@@ -690,7 +697,8 @@ class TeamUI:
         state = self.model.state
         reason = state.get("reason", "waiting")
         return bool(
-            self.confirm_leave
+            self.exiting
+            or self.confirm_leave
             or not self.connected
             or self.model.notice
             or state.get("paused")
@@ -702,18 +710,29 @@ class TeamUI:
 
     def guidance(self):
         compact = self.application.output.get_size().columns < 70
+        if self.exiting:
+            return [("class:warning", "  Leaving… Ctrl-C again to close immediately.")]
         if self.confirm_leave:
+            key = self.confirm_leave
             if compact:
-                question = "Stop this team?" if self.stop_on_exit else "Discard draft?"
-                return [("class:warning", f"  {question} Ctrl-D confirms; Esc cancels.")]
+                question = (
+                    "Stop this team?"
+                    if self.stop_on_exit
+                    else "Discard draft?"
+                    if self.input.text.strip()
+                    else "Leave chat?"
+                )
+                return [("class:warning", f"  {question} {key} confirms; Esc cancels.")]
             return [
                 (
                     "class:warning",
                     "  "
                     + (
-                        "Leaving stops this team. Ctrl-D again to confirm; Esc to stay."
+                        f"Leaving stops this team. {key} again to confirm; Esc to stay."
                         if self.stop_on_exit
-                        else "Unsent draft. Ctrl-D again to discard and leave; Esc to keep editing."
+                        else f"Unsent draft. {key} again to discard and leave; Esc to keep editing."
+                        if self.input.text.strip()
+                        else f"Interrupt requested. {key} again to leave; Esc to stay."
                     ),
                 )
             ]
@@ -755,7 +774,8 @@ class TeamUI:
         return ""
 
     def footer(self):
-        leave = "Ctrl-D Stop & leave" if self.stop_on_exit else "Ctrl-D Leave"
+        confirm = self.active_work() or self.input.text.strip()
+        leave = "Ctrl-C ×2 Exit" if confirm and self.confirm_leave != "Ctrl-C" else "Ctrl-C Exit"
         auto = self.model.state.get("permission_mode") == "full_auto"
         mode = "full auto" if auto else "phase-scoped"
         if self.application.output.get_size().columns < 70:
@@ -787,6 +807,7 @@ class TeamUI:
             self.read_at = self.model.new_messages
 
     def show(self, view):
+        self.confirm_leave = None
         self.view = view
         self.follow = True
         self.painted = None
@@ -814,6 +835,8 @@ class TeamUI:
         self.painted = key
 
     def submit(self):
+        if self.exiting:
+            return
         buffer = self.input.buffer
         if buffer.complete_state and buffer.complete_state.current_completion:
             # Accept the suggestion, not the action. A second Enter explicitly sends it.
@@ -855,12 +878,46 @@ class TeamUI:
                 self.show("conversation")
             self.pending.put_nowait(text)
 
-    def leave(self):
-        if (self.stop_on_exit or self.input.text.strip()) and not self.confirm_leave:
-            self.confirm_leave = True
+    def active_work(self):
+        state = self.model.state
+        return self.connected and bool(
+            self.model.turns or state.get("active_turns") or state.get("active")
+        )
+
+    def interrupt_or_leave(self):
+        if self.exiting or self.confirm_leave == "Ctrl-C":
+            self.request_exit()
+        elif self.active_work() or self.input.text.strip():
+            if self.active_work():
+                self.pending.put_nowait("/interrupt")
+            self.confirm_leave = "Ctrl-C"
             self.application.invalidate()
-            return
-        self.application.exit()
+        else:
+            self.request_exit()
+
+    def leave(self):
+        if self.exiting or self.confirm_leave == "Ctrl-D":
+            self.request_exit()
+        elif self.stop_on_exit or self.input.text.strip():
+            self.confirm_leave = "Ctrl-D"
+            self.application.invalidate()
+        else:
+            self.request_exit()
+
+    def exit_now(self):
+        if not self.application.is_done:
+            self.application.exit()
+
+    def request_exit(self):
+        if self.exiting or not self.connected:
+            self.exit_now()
+        else:
+            self.exiting = True
+            # Keep a fast double Ctrl-C from dropping its queued interrupt. Exit is
+            # ordered after preceding requests have drained to the transport, not
+            # after a server acknowledgement. Another Ctrl-C can force local exit.
+            self.pending.put_nowait(None)
+            self.application.invalidate()
 
     async def run(self, reader, writer, welcome):
         self.model.handle(welcome)
@@ -873,6 +930,9 @@ class TeamUI:
         async def send_inputs():
             while True:
                 text = await self.pending.get()
+                if text is None:
+                    self.exit_now()
+                    return
                 try:
                     writer.write(encode(parse_input(text)))
                     await writer.drain()
@@ -891,15 +951,20 @@ class TeamUI:
             except (EOFError, OSError) as exc:
                 self.connected = False
                 self.model.record("Disconnected", str(exc) or "The server closed the connection.")
+                if self.exiting:
+                    self.exit_now()
                 self.application.invalidate()
             except Exception as exc:
-                self.application.exit(exception=exc)
+                if not self.application.is_done:
+                    self.application.exit(exception=exc)
             finally:
                 for task in tasks:
                     task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
                 while not self.pending.empty():
                     text = self.pending.get_nowait()
+                    if text is None:
+                        continue
                     self.model.record("Not sent", text)
                     if not self.input.text:
                         self.input.text = text
