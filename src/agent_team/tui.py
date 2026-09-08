@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,8 +11,10 @@ from prompt_toolkit.application import Application
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition
+from prompt_toolkit.formatted_text import fragment_list_to_text
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import (
     ConditionalContainer,
     Float,
@@ -27,6 +30,7 @@ from prompt_toolkit.layout.processors import AfterInput, ConditionalProcessor
 from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.mouse_events import MouseEventType
 from prompt_toolkit.styles import Style
+from prompt_toolkit.utils import get_cwidth
 from prompt_toolkit.widgets import TextArea
 
 from .client import (
@@ -420,7 +424,8 @@ class RoomView:
                 "? on empty input      Open keyboard shortcuts\n"
                 "Ctrl-O                Toggle Activity\n"
                 "Ctrl-T                Toggle Plan\n"
-                "PgUp / PgDn           Read without following new output\n"
+                "Mouse wheel           Scroll three display rows; bottom resumes live output\n"
+                "PgUp / PgDn           Scroll one screen at a time\n"
                 "Ctrl-End              Return to the latest conversation\n"
                 "F2 / F3 / F4 / F1     Conversation / Plan / Activity / Help\n"
                 "Escape                Dismiss suggestions or return to the conversation\n"
@@ -432,7 +437,8 @@ class RoomView:
                 "Use /interrupt to pause without leaving. Use Ctrl-D or /quit to leave a join "
                 "client without interrupting the team.\n\n"
                 "Multiline bracketed paste stays in the editor until you press Enter.\n"
-                "While reading history, new output is retained without moving your view.",
+                "Scrolling keeps your input focus and draft. While reading history, new output "
+                "is retained without moving your view. Scroll to the bottom to follow again.",
             )
             page.block(
                 "Actions", HELP + "\n/chat          Conversation\n/activity      Event details"
@@ -461,6 +467,65 @@ class PageLexer(Lexer):
         return line
 
 
+class TranscriptWindow(Window):
+    """Scroll display rows independently of the read-only buffer's cursor."""
+
+    def __init__(self, content, following):
+        self.following = following
+        self.top = 0
+        self.pending_scroll = 0
+        self.resume_at_bottom = False
+        self.at_bottom = True
+        self.rows = [(0, 0)]
+        self.wrap_width = 80
+        self.cache_key = None
+        super().__init__(
+            content,
+            height=Dimension(min=1),
+            wrap_lines=True,
+            style="class:text-area",
+            get_line_prefix=self.line_prefix,
+        )
+
+    def line_prefix(self, line, wrap):
+        return [("", " " * min(4, max(0, self.wrap_width - 1)))] if wrap else []
+
+    def _scroll_when_linewrapping(self, ui_content, width, height):
+        if width <= 0 or height <= 0:
+            return
+        key = (self.content.buffer.text, width)
+        if key != self.cache_key:
+            anchor = self.rows[min(self.top, len(self.rows) - 1)]
+            self.wrap_width = width
+            self.rows = []
+            # Match the renderer's character widths, including wide characters,
+            # combining marks, expanded tabs, and continuation indentation.
+            for row in range(ui_content.line_count):
+                self.rows.append((row, 0))
+                used = 0
+                for col, char in enumerate(fragment_list_to_text(ui_content.get_line(row))):
+                    size = get_cwidth(char)
+                    if used + size > width:
+                        self.rows.append((row, col))
+                        used = min(4, width - 1)
+                    used += size
+            self.top = max(0, bisect_right(self.rows, anchor) - 1)
+            self.cache_key = key
+        maximum = max(0, len(self.rows) - height)
+        if self.following():
+            cursor = ui_content.cursor_position
+            position = bisect_right(self.rows, (cursor.y, cursor.x)) - 1
+            self.top = max(position - height + 1, min(self.top, position))
+        self.top = max(0, min(maximum, self.top + self.pending_scroll))
+        if self.resume_at_bottom:
+            self.top = maximum  # A reading/status row may have changed the viewport height.
+        self.pending_scroll = 0
+        self.at_bottom = self.top == maximum
+        self.vertical_scroll = self.rows[self.top][0]
+        self.vertical_scroll_2 = self.top - bisect_left(self.rows, (self.vertical_scroll, 0))
+        self.horizontal_scroll = 0
+
+
 class TeamUI:
     """Testable terminal layout, input routing, and stable scrollback snapshots."""
 
@@ -483,8 +548,8 @@ class TeamUI:
             wrap_lines=True,
             lexer=self.lexer,
             focus_on_click=True,
-            get_line_prefix=lambda line, wrap: [("", "    ")] if wrap else [],
         )
+        self.body.window = TranscriptWindow(self.body.control, lambda: self.follow)
         self.input = TextArea(
             multiline=True,
             read_only=Condition(lambda: self.exiting),
@@ -553,8 +618,12 @@ class TeamUI:
         @bindings.add("pageup")
         @bindings.add("pagedown")
         def scroll(event):
-            self.freeze()
             self.scroll(event.key_sequence[-1].key == "pageup")
+
+        @bindings.add(Keys.ScrollUp)
+        @bindings.add(Keys.ScrollDown)
+        def wheel(event):
+            self.scroll(event.key_sequence[-1].key == Keys.ScrollUp, lines=3)
 
         @bindings.add("c-end")
         def latest(event):
@@ -568,18 +637,6 @@ class TeamUI:
         ):
             bindings.add(key)(lambda event, view=view: self.show(view))
 
-        original_mouse = self.body.control.mouse_handler
-
-        def mouse(event):
-            if event.event_type in {
-                MouseEventType.SCROLL_UP,
-                MouseEventType.SCROLL_DOWN,
-                MouseEventType.MOUSE_DOWN,
-            }:
-                self.freeze()
-            return original_mouse(event)
-
-        self.body.control.mouse_handler = mouse
         container = HSplit(
             [
                 ConditionalContainer(
@@ -624,6 +681,7 @@ class TeamUI:
             mouse_support=True,
             min_redraw_interval=0.05,
             before_render=lambda app: self.paint(),
+            after_render=self.after_render,
             style=Style.from_dict(
                 {
                     "": "",
@@ -647,6 +705,25 @@ class TeamUI:
             ),
             **app_options,
         )
+        for window in self.application.layout.find_all_windows():
+            control = window.content
+            if control in (self.body.control, self.input.control) or isinstance(
+                control, FormattedTextControl
+            ):
+                original_mouse = control.mouse_handler
+
+                def mouse(event, original=original_mouse, control=control):
+                    if event.event_type in {MouseEventType.SCROLL_UP, MouseEventType.SCROLL_DOWN}:
+                        self.scroll(event.event_type == MouseEventType.SCROLL_UP, lines=3)
+                        return None
+                    if (
+                        control is self.body.control
+                        and event.event_type == MouseEventType.MOUSE_DOWN
+                    ):
+                        self.freeze()
+                    return original(event)
+
+                control.mouse_handler = mouse
 
     def room_label(self):
         label = "Shared conversation"
@@ -784,23 +861,35 @@ class TeamUI:
             return f"  {mode} · / commands · ? help · {leave}"
         return f"  {mode} · / commands · ? shortcuts · {leave}"
 
-    def scroll(self, up):
-        info = self.body.window.render_info
+    def scroll(self, up, *, lines=None):
+        window = self.body.window
+        info = window.render_info
         if not info:
             return
-        visible = {
-            row: value
-            for row, value in info.visible_line_to_row_col.items()
-            if 0 <= row < info.window_height
-        }
-        if not visible:
+        maximum = max(0, len(window.rows) - info.window_height)
+        current = window.top + window.pending_scroll
+        if up and current == 0 or not up and current == maximum and self.follow:
             return
-        row, column = visible[min(visible) if up else max(visible)]
-        # Display coordinates preserve positions inside a long, wrapped paragraph.
-        position = self.body.document.translate_row_col_to_index(row, column)
-        if position == self.body.buffer.cursor_position:
-            position += -1 if up else 1
-        self.body.buffer.cursor_position = max(0, min(position, len(self.body.text)))
+        self.freeze()
+        distance = lines if lines is not None else max(1, info.window_height - 1)
+        target = max(0, min(maximum, current + (-distance if up else distance)))
+        window.pending_scroll = target - window.top
+        window.resume_at_bottom = not up and target == maximum
+        self.application.invalidate()
+
+    def after_render(self, app):
+        window = self.body.window
+        if (
+            self.view == "conversation"
+            and not self.follow
+            and window.resume_at_bottom
+            and window.at_bottom
+        ):
+            self.follow = True
+            window.resume_at_bottom = False
+            self.painted = None
+            self.paint()
+            app.invalidate()
 
     def freeze(self):
         if self.follow:
@@ -811,6 +900,8 @@ class TeamUI:
         self.confirm_leave = None
         self.view = view
         self.follow = True
+        self.body.window.pending_scroll = 0
+        self.body.window.resume_at_bottom = False
         self.painted = None
         self.model.notice = ""
         self.application.layout.focus(self.input)

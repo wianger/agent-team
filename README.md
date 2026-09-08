@@ -54,7 +54,7 @@ History lives in `<session>/events.sqlite3`. The default session path is relativ
 
 ## Using the CLI
 
-Enter sends the complete draft; Alt+Enter or Ctrl-J inserts a newline. Multiline paste waits for explicit submission. Type `/` for command suggestions. PgUp/PgDn or mouse scrolling holds your reading position; Ctrl-End returns to the latest conversation. Escape dismisses suggestions or detail views without interrupting agents or discarding your draft.
+Enter sends the complete draft; Alt+Enter or Ctrl-J inserts a newline. Multiline paste waits for explicit submission. Type `/` for command suggestions. The mouse wheel scrolls three display rows, including wrapped text, without moving input focus or changing your draft; PgUp/PgDn moves one screen. Reading holds a stable snapshot; scroll to the bottom or press Ctrl-End to follow live output again. Escape dismisses suggestions or detail views without interrupting agents or discarding your draft.
 
 | Command | Effect |
 | --- | --- |

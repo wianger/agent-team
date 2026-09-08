@@ -456,12 +456,12 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
         self.ui.model.handle(message(1, "word " * 2_000))
         self.ui.application.invalidate()
         await eventually(lambda: "word " in self.ui.body.text)
-        before = self.ui.body.buffer.cursor_position
+        before = self.ui.body.window.top
         self.pipe.send_text("\x1b[5~")
-        await eventually(lambda: not self.ui.follow)
-        position = self.ui.body.buffer.cursor_position
+        await eventually(lambda: not self.ui.follow and self.ui.body.window.pending_scroll == 0)
+        position = self.ui.body.window.top
         self.assertLess(position, before)
-        self.assertGreater(position, before - 2_000)
+        self.assertGreaterEqual(position, before - self.output.rows)
 
     async def test_local_navigation_does_not_send_unknown_wire_commands(self):
         self.pipe.send_text("/activity\r")
@@ -609,19 +609,145 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('"type": "error"', self.ui.body.text)
 
     async def test_reading_with_mouse_freezes_the_snapshot(self):
-        from prompt_toolkit.data_structures import Point
-        from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
-
-        self.ui.model.handle(message(1, "Initial public message"))
-        self.ui.paint()
-        self.ui.body.control.mouse_handler(
-            MouseEvent(Point(0, 0), MouseEventType.SCROLL_UP, MouseButton.NONE, frozenset())
-        )
-        self.assertFalse(self.ui.follow)
+        self.ui.model.handle(message(1, "\n".join(f"Line {i}" for i in range(80))))
+        self.ui.application.invalidate()
+        await eventually(lambda: "Line 79" in screen_text(self.ui))
+        self.pipe.send_text("\x1b[<64;5;5M")
+        await eventually(lambda: not self.ui.follow)
         text = self.ui.body.text
         self.ui.model.handle(message(2, "New public message"))
         self.ui.paint()
         self.assertEqual(self.ui.body.text, text)
+
+    async def test_wheel_scrolls_wrapped_display_rows_and_preserves_the_composer(self):
+        self.ui.model.handle(message(1, " ".join(f"word{i:04}" for i in range(2000))))
+        self.ui.application.invalidate()
+        await eventually(lambda: "word1999" in screen_text(self.ui))
+        self.pipe.send_text("Keep this draft")
+        await eventually(lambda: self.ui.input.text == "Keep this draft")
+        window = self.ui.body.window
+        before = window.top
+        self.pipe.send_text("\x1b[<64;5;5M" * 2)
+        await eventually(lambda: window.top == before - 6)
+        self.pipe.send_text("\x1b[<65;5;5M")
+        await eventually(lambda: window.top == before - 3)
+        self.assertFalse(self.ui.follow)
+        self.assertTrue(self.ui.application.layout.has_focus(self.ui.input))
+        self.assertEqual(self.ui.input.text, "Keep this draft")
+        self.assertFalse(self.writer.requests)
+
+    async def test_fast_wheel_events_accumulate_before_redraw_and_clamp_at_the_top(self):
+        self.ui.model.handle(message(1, "\n".join(f"Line {i}" for i in range(150))))
+        self.ui.application.invalidate()
+        await eventually(lambda: "Line 149" in screen_text(self.ui))
+        window = self.ui.body.window
+        before = window.top
+        self.pipe.send_text("\x1b[<64;5;5M" * 10)
+        await eventually(lambda: window.top == before - 30)
+        self.pipe.send_text("\x1b[<64;5;5M" * 100)
+        await eventually(lambda: window.top == 0)
+        self.assertFalse(self.ui.follow)
+        self.assertIn("agent-team", screen_text(self.ui))
+
+    async def test_scrolling_to_the_bottom_resumes_new_messages_and_live_drafts(self):
+        self.ui.model.handle(message(1, "\n".join(f"Line {i}" for i in range(80))))
+        self.ui.application.invalidate()
+        await eventually(lambda: "Line 79" in screen_text(self.ui))
+        self.pipe.send_text("\x1b[<64;5;5M" * 3)
+        await eventually(lambda: not self.ui.follow and self.ui.body.window.pending_scroll == 0)
+        self.ui.model.handle(message(2, "Latest contribution"))
+        self.ui.model.handle(turn())
+        self.ui.model.handle(
+            {"type": "delta", "turn_id": "a", "speaker": "member_a", "text": "Live thought"}
+        )
+        self.ui.application.invalidate()
+        self.assertNotIn("Latest contribution", self.ui.body.text)
+        self.pipe.send_text("\x1b[<65;5;5M" * 20)
+        await eventually(lambda: self.ui.follow and "Live thought" in screen_text(self.ui))
+        self.assertIn("Latest contribution", self.ui.body.text)
+        self.assertEqual(self.ui.reading_hint(), "")
+        self.assertFalse(self.writer.requests)
+
+    async def test_wheel_over_the_composer_scrolls_history_without_editing_the_draft(self):
+        self.ui.model.handle(message(1, "\n".join(f"Line {i}" for i in range(80))))
+        self.ui.application.invalidate()
+        await eventually(lambda: "Line 79" in screen_text(self.ui))
+        self.pipe.send_text("Draft")
+        await eventually(lambda: self.ui.input.text == "Draft")
+        position = self.ui.application.renderer._last_screen.visible_windows_to_write_positions[
+            self.ui.input.window
+        ]
+        before = self.ui.body.window.top
+        self.pipe.send_text(f"\x1b[<64;5;{position.ypos + 1}M")
+        await eventually(lambda: self.ui.body.window.top == before - 3)
+        self.assertTrue(self.ui.application.layout.has_focus(self.ui.input))
+        self.assertEqual(self.ui.input.text, "Draft")
+
+    async def test_wheel_on_a_short_conversation_does_not_disable_following(self):
+        self.pipe.send_text("\x1b[<64;5;5M\x1b[<65;5;5M")
+        await asyncio.sleep(0.1)
+        self.assertTrue(self.ui.follow)
+        self.assertEqual(self.ui.body.window.top, 0)
+
+    async def test_scrolling_to_the_end_of_help_does_not_jump_back_to_the_top(self):
+        self.ui.show("help")
+        await eventually(lambda: "Make yourself at home" in screen_text(self.ui))
+        self.pipe.send_text("\x1b[<65;5;5M" * 100)
+        await eventually(lambda: not self.ui.follow and self.ui.body.window.at_bottom)
+        self.assertEqual(self.ui.view, "help")
+        self.assertGreater(self.ui.body.window.top, 0)
+        self.assertIn("Execution permissions", screen_text(self.ui))
+
+    async def test_returning_to_live_output_preserves_notices_and_exit_confirmation(self):
+        self.ui.model.handle(message(1, "\n".join(f"Line {i}" for i in range(80))))
+        self.ui.application.invalidate()
+        await eventually(lambda: "Line 79" in screen_text(self.ui))
+        self.pipe.send_text("\x1b[<64;5;5M" * 3)
+        await eventually(lambda: not self.ui.follow and self.ui.body.window.pending_scroll == 0)
+        self.ui.model.notice = "Preserve this diagnostic"
+        self.pipe.send_text("Draft\x03")
+        await eventually(lambda: self.ui.confirm_leave == "Ctrl-C")
+        self.pipe.send_text("\x1b[<65;5;5M" * 20)
+        await eventually(lambda: self.ui.follow)
+        self.assertEqual(self.ui.model.notice, "Preserve this diagnostic")
+        self.assertEqual(self.ui.confirm_leave, "Ctrl-C")
+        self.assertEqual(self.ui.input.text, "Draft")
+
+    async def test_wheel_without_coordinates_does_not_move_the_input_cursor(self):
+        from prompt_toolkit.key_binding.key_processor import KeyPress
+        from prompt_toolkit.keys import Keys
+
+        self.ui.model.handle(message(1, "\n".join(f"Line {i}" for i in range(80))))
+        self.ui.application.invalidate()
+        await eventually(lambda: "Line 79" in screen_text(self.ui))
+        self.pipe.send_text("Keep this draft")
+        await eventually(lambda: self.ui.input.text == "Keep this draft")
+        before = self.ui.body.window.top
+        cursor = self.ui.input.buffer.cursor_position
+        self.ui.application.key_processor.feed(KeyPress(Keys.ScrollUp))
+        self.ui.application.key_processor.process_keys()
+        await eventually(lambda: self.ui.body.window.top == before - 3)
+        self.assertEqual(self.ui.input.buffer.cursor_position, cursor)
+        self.assertEqual(self.ui.input.text, "Keep this draft")
+
+    async def test_wide_wrapped_text_keeps_its_reading_anchor_after_resize(self):
+        text = "\u754c\U0001f600e\u0301\t" * 300
+        self.ui.model.handle(message(1, text))
+        self.ui.application.invalidate()
+        await eventually(lambda: text in self.ui.body.text and self.ui.body.window.top > 0)
+        self.pipe.send_text("\x1b[<64;5;5M" * 4)
+        window = self.ui.body.window
+        await eventually(lambda: not self.ui.follow and window.pending_scroll == 0)
+        row, column = window.rows[window.top]
+        self.output.columns, self.output.rows = 51, 14
+        self.ui.application.invalidate()
+        await eventually(lambda: window.render_info.window_width == 51)
+        new_row, new_column = window.rows[window.top]
+        self.assertEqual(new_row, row)
+        self.assertLessEqual(new_column, column)
+        self.assertLess(column - new_column, 51)
+        self.assertFalse(self.ui.follow)
+        self.assertTrue(self.ui.application.layout.has_focus(self.ui.input))
 
 
 class LiveRoomTests(unittest.IsolatedAsyncioTestCase):
