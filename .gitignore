@@ -1,0 +1,7 @@
+.venv/
+.agent-team/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+dist/
+*.egg-info/
