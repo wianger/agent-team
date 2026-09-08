@@ -1,300 +1,113 @@
 # agent-team
 
-Start with an idea. Claude Code, Codex, and other agents discuss it in a shared conversation, reach explicit consensus, then build and judge each other's work. Humans can observe, contribute, interrupt, and redirect the team from a CLI.
+Start with an idea. Claude Code, Codex, and other agents discuss it in a shared conversation, reach explicit consensus, then build and judge each other's work. Humans guide the team through a conversation-first CLI.
 
-Python 3.11+ on Linux, macOS, or WSL. Native Windows is not supported because process groups and workspace locks use POSIX interfaces.
+Requires Python 3.11+ on Linux, macOS, or WSL. Native Windows is not supported.
 
 ## Quick start
+
+From this repository, try the account-free demo:
 
 ```bash
 uv sync
 uv run agent-team demo
 ```
 
-The deterministic demo needs no accounts. Its equally responsible members are named `member_a` and `member_b`. Enter an idea to watch proposal, unanimous agreement, shared implementation, immediate peer judgments, integration review, and actual acceptance checks. It builds a fixed greeting example, regardless of the idea. Files and history live in a disposable temporary workspace, removed on exit.
+The demo uses two mock agents to build a fixed greeting example, regardless of your idea. Its temporary files and history are removed on exit.
 
-For real work, install and sign in to both `claude` and `codex`. Set `workspace` in [team.toml](team.toml) to the project you want the team to modify, then run:
-
-```bash
-uv run agent-team doctor
-uv run agent-team
-```
-
-`agent-team` without a subcommand initializes and starts the interactive team, just like `agent-team start`. Once installed, run it directly in your project directory, including on the first launch:
+For real work, install and sign in to `claude` and `codex`, then install agent-team and open your project:
 
 ```bash
+uv tool install --editable .
+cd /path/to/project
 agent-team
 ```
 
-No preliminary `init` is required. When no `--config` is supplied and the current directory has no `team.toml`, interactive startup creates the default configuration atomically, then opens the room. The defaults use the current project as the workspace, Claude and Codex in chatroom/full-auto mode, and `.agent-team/default` for history. No model is called until you send an idea or explicitly resume work. Existing configuration is reused without rewriting it; malformed files and dangling configuration symlinks are not silently replaced.
+No preliminary `init` is needed. First launch creates `team.toml` if missing and opens the idea prompt. Existing configuration is reused, never silently replaced. Defaults select Claude and Codex, concurrent chatroom mode, full-auto permissions, the current project as workspace, and `.agent-team/default` for history. **Full-auto permits real file changes and command execution; use a trusted or disposable workspace.**
 
-Startup options also work without `start`, for example `agent-team --session .agent-team/default --name user`. An explicit `--config /path/to/team.toml` must refer to an existing file; misspelled paths do not create new configurations. `--help`, `--version`, and `doctor` never initialize anything. `serve` retains its requirement for an existing configuration. A recovered session still starts paused: use `/resume` to continue it.
+Send your goal, constraints, and acceptance criteria to begin. No model is called before you send an idea or resume existing work. After unanimous agreement, implementation starts without another human approval step. Calls use each CLI's local authentication, settings, and quota; an omitted `model` uses its CLI default.
 
-Once all agents agree, build mode automatically allows implementation and executes the agreed checks. No extra human approval step is required. Calls use each CLI's local authentication and account quota; omitted models use the CLI defaults. `doctor` checks configuration and executables, not account access or quota.
-
-The checked-in configuration and `init` template select `interaction_mode = "chatroom"` and `permission_mode = "full_auto"`. Members think concurrently and publish independently. An assigned Codex writer has full access; other Codex turns are read-only. Claude Code uses auto mode with a host-side tool guard for non-writing turns. Use only with a trusted workspace and review the [operational boundaries](#permissions-and-operational-boundaries).
-
-Another terminal can join:
-
-```bash
-uv run agent-team join --name observer
-```
-
-The default session directory is `.agent-team/default` under your current directory. From elsewhere, supply its absolute path with `--session /path/to/.agent-team/default`.
-
-`agent-team` (or `agent-team start`) runs the server and your terminal together; leaving stops that server and disconnects its clients, but retains history. For unattended work, run the server independently and participate through `join`:
-
-```bash
-# Terminal 1
-uv run agent-team serve
-# Terminal 2
-uv run agent-team join
-```
-
-Leaving `join` (including `/quit`, Ctrl-D, or a connection loss) does not pause or interrupt the team, even when no humans remain online. Discussion, implementation, peer judgment, and acceptance checks continue; reconnect with `join` to see the current state and all committed history. Keep the `serve` process running: it is a foreground server, not a detached daemon. Stopping it with Ctrl-C or SIGTERM shuts down the room and cancels active work.
-
-`agent-team init` remains available if you want to create and edit a configuration before starting; it is optional for interactive startup.
+Use `agent-team doctor` to check an existing configuration and executable availability; it does not verify authentication or quota. Startup options need no subcommand: `agent-team --config /path/to/team.toml --session /path/to/session`. Explicit configuration paths must exist. `agent-team init` remains optional when you want to configure the team before starting.
 
 ## How collaboration works
 
-```mermaid
-flowchart LR
-    Idea[Human idea] --> Discuss[Discuss and revise]
-    Discuss --> Agree[Everyone approves the same version]
-    Agree --> Work[Shared implementation checkpoint]
-    Work --> Judge[Other agents judge the actual changes]
-    Judge -- Problems or partial draft --> Work
-    Judge -- Accepted milestone --> More{More milestones?}
-    More -- Yes --> Work
-    More -- No --> Review[Everyone reviews the integrated result]
-    Review -- Problems --> Work
-    Review --> Checks[Coordinator executes agreed checks]
-    Checks -- Failure --> Work
-    Checks -- Success --> Done[Completed]
-```
+Idea → Discussion → Unanimous agreement → Shared implementation and peer judgment → Integration review → Acceptance checks
 
-This is shared authorship, not a set of private coding assignments. Every agent can modify another agent's implementation within the agreed scope. Tasks describe shared milestones and dependencies; an optional `owner` in older proposals is a suggestion, never an access restriction.
+- **Equal responsibilities:** every member can propose, challenge, implement, and review. Names and backends do not assign permanent roles. Milestones are shared work, not isolated coding assignments; agents can revise each other's implementations.
+- **Concurrent discussion, one writer:** members think independently and publish as they finish. Only one implementation or acceptance-check turn holds the workspace write lease. Formal readers finish before another writer starts; conversation-only turns may continue but cannot write, vote, or judge.
+- **Explicit consensus and reciprocal review:** all members must approve the same proposal version. Each implementation checkpoint needs judgment from every other member; its author cannot self-approve. Rejections carry evidence and reopen work. The critic can take the next write turn.
+- **Evidence before completion:** all members review the integrated result, then the coordinator runs the agreed acceptance commands. Failed checks reopen work. Completion means those checks passed, not that every possible defect is absent.
 
-All agents receive the same core responsibilities: think independently, discuss goals and architecture, propose and challenge plans, implement shared work, and critically review and verify peer changes. Names and backends do not imply fixed specialties, seniority, or exclusive assignments. Who implements or judges changes with the workflow and current contribution, not a permanent model-specific role.
+Public messages are ordered and retained in full. Busy agents receive accumulated messages at their next input boundary, not during an in-flight generation. Live drafts are separate from committed messages, and private reasoning is not shared. With nothing new to contribute, agents yield and listen; silence is not approval.
 
-Implementation alternates with judgment throughout the build:
+There are no application-imposed round, output-length, message-length, or shared-context limits. Hard timeouts are disabled by default. Provider limits, quota, and available memory/disk still apply. A notice after 120 seconds without observable output is informational: it does not cancel work or prove the agent is stuck.
 
-1. An agent submits a versioned checkpoint, including files, reasoning, and actual test results. A checkpoint may be a partial draft.
-2. Every other agent must inspect and judge that revision. Its author cannot self-approve. A rejection carries concrete evidence and reopens the milestone.
-3. The critic can take the next write turn and demonstrate a fix. The previous author then judges the revision. Writer turns rotate between agents; humans can choose another eligible writer with `/next`.
-4. Only a ready checkpoint accepted by all peers completes a milestone and releases its dependencies.
+## Agreements, context, and history
 
-A final all-member integration review catches interactions between milestones and changes made after earlier checkpoints. Review failures reopen the affected tasks and downstream dependencies. Only the coordinator can mark the project completed, after all declared acceptance commands actually exit successfully. Passing those checks establishes the agreed checks passed, not that every possible defect is absent.
+Each confirmed proposal is written before implementation to `docs/agent-team/<room-id>/consensus-vNNNN.md` inside the workspace. Documents record the approved scope, milestones, acceptance commands, and approving members. Use `/consensus` to inspect the latest agreement and previous versions.
 
-Speaking and writing are separate. In chatroom mode, each member has a resident worker and an independent private connection. Discussion and eligible peer/integration reviews run concurrently. Members publish as they finish, without round-robin speaking turns or cancelling slower peers. The server orders committed messages; the CLI keeps simultaneous drafts in separate buffers.
+Agreements remain revisable. Ordinary chat adds context; `/revise <guidance>` (alias `/redirect`) stops active work and reopens discussion. Agents can also request revision themselves. Earlier documents, code, and contribution history remain available, but a revised proposal needs fresh unanimous approval. Generated documents are snapshots, not instructions to edit directly. If publication fails, resolve the filesystem problem and use `/resume`.
 
-Only one implementation or acceptance-check turn holds the workspace write lease. Formal readers finish before the next writer begins; conversation-only turns can continue while implementation runs but cannot vote, judge, or write files. All approvals must refer to the current proposal/checkpoint generation. Stale concurrent actions are recorded as rejected, not applied or silently counted. Unanimous discussion waits for in-flight formal discussion to finish so a pending objection cannot race with the first write.
+By default, each native agent keeps its own resumable private session: Codex uses a resident app-server; Claude uses a streaming CLI connection. The first turn receives the full public transcript, later turns receive missing messages plus current workflow instructions. Private sessions are working memory; the public SQLite record is authoritative. Failed or interrupted sessions are rebuilt from public history when explicitly retried.
 
-New messages are broadcast to clients immediately and retained for every member. Busy agents consume accumulated messages at their next input boundary; this version does not inject public messages into an in-flight model generation or claim token-by-token shared awareness. An agent's own publication alone does not trigger another model call unless workflow progress requires one. With nothing new to contribute, members yield and listen for new events instead of polling models. There are no permanent model-specific roles.
+History lives in `<session>/events.sqlite3`. The default session path is relative to the directory where you launch agent-team, while `workspace` is relative to the configuration file. Deleting source files or `team.toml` does not clear the hidden `.agent-team` directory. Reopening the same session restores history **paused**; use `/resume`. To start fresh without deleting old history, choose an unused path: `agent-team --session .agent-team/new-session`. Changing team members or workspace also requires a new room.
 
-Set `interaction_mode = "serial"` for the previous single-floor scheduler. Configurations that omit this key retain serial behavior; the checked-in configuration, `init` template, and interactive `demo` use chatroom mode.
+## Using the CLI
 
-## Living agreements and consensus documents
-
-In build mode, each unanimously confirmed proposal becomes a Markdown document before implementation starts:
-
-```text
-docs/agent-team/<room-id>/consensus-v0001.md
-docs/agent-team/<room-id>/consensus-v0002.md
-```
-
-Paths are relative to the team's workspace. A stable, generated room ID separates documents from different sessions. The version is the proposal version, so rejected drafts can leave gaps in the document numbers. `/consensus` shows the latest approved record, its document path, and previous versions; `/plan` also links the agreement to current work.
-
-The coordinator renders the actual approved scope, acceptance criteria, shared milestones, check commands, and approving members. It does not ask another model to summarize or invent agreement. In chatroom mode, outstanding formal discussion must finish before agreement is confirmed, so a pending objection cannot produce an approved document. A manual pause still allows finishing discussion to produce its document, but does not start implementation.
-
-Agreements remain revisable. Ordinary chat adds context; use an explicit revision request to stop current work and reconsider:
-
-```text
-/revise Keep the public API, but reconsider persistence for offline use.
-```
-
-`/revise` is an alias for `/redirect`. A member may also submit `request_revision` with the current proposal version and a concrete reason, including from the conversation lane. This request cannot approve a plan or judge code. Active work is revoked; the coordinator waits for a cancelled writer/check runner to finish before starting new formal readers.
-
-The previous agreement, documents, code, contributions, checkpoint, and check results remain available. `revision_base` preserves the pre-revision working state for discussion. Agents propose a new version, explain what changes and what remains valid, and obtain fresh approval from every member. Existing artifacts can be reused, but old approvals and completed milestone states are not automatically transferred to a revised plan. After renewed consensus, a new document records the reason for revision and links the preceding version. Work can also be reopened after completion.
-
-Documents are generated snapshots, not files to edit directly to change team authority. Earlier versions remain historical records; the room identifies the active agreement or pending revision. The public SQLite workflow is authoritative. Document publication is atomic and does not overwrite different existing content or follow symlinks in the generated path. If publication fails, implementation pauses with `document_error`; resolve the filesystem issue and `/resume`. The approved record is retained, and the model approval turn is not replayed.
-
-After an upgrade/restart, previously confirmed agreements can be recovered from the durable workflow history, including agreements preceding a reopened discussion. Missing documents are recreated without model calls. Recovery still starts paused. This is a server feature: a new terminal alone cannot enable it on an already-running older server. It does not change `serve`/`join` ownership or automatically restart your team.
-
-## No round or output limits
-
-The application imposes no conversation-round budget, output-length limit, message-length limit, or shared-context character limit. It does not truncate prompts, public messages, terminal history, CLI error diagnostics, or acceptance-check output. Large JSONL frames are read incrementally without a fixed frame-length cap. Joining replays the complete committed conversation.
-
-There is no automatic stop after a number of rounds or repair attempts. Work continues until completion, a user pause, an explicit blocker, or a failed team call. In chatroom mode, any member failure pauses the entire team and interrupts all other active turns, including writers and acceptance checks. Revoked replies cannot publish or advance the workflow; mandatory votes are never waived. If everyone has nothing new to add, workers remain listening for new messages. Yielding is not consensus. Serial mode also pauses the whole room on error or all-member yield.
-
-Provider context windows, provider output limits, local CLI settings, available memory/disk, and account quota still apply. Public history is retained in full. Session mode sends new public messages after the first invocation, while the backend maintains a growing private context and may compact it. Incremental delivery does not guarantee lower model-token cost. This project does not bypass provider limits or silently summarize the public record.
-
-Hard timeouts are disabled by default for discussion, implementation, peer judgment, integration review, and acceptance checks. Work can continue until completion or a user interruption. Set a timeout to a positive number of seconds only if you want an explicit total-duration limit; it can terminate an otherwise active process. Existing configurations with positive timeouts keep those limits; set them to `0` to remove them. `/next` intentionally executes one turn because the user requested a single step; it is not a conversation budget.
-
-After 120 seconds without observable output, the terminal shows a waiting notice, without cancelling the process, pausing the room, revoking the floor, or invalidating its private session. Each continuous silent period produces one notice; new output rearms it. Native CLI stdout (including tool events and partial JSON frames), stderr, and acceptance-command output all count as activity, without publishing private reasoning or diagnostics. Silence is not proof of a hang: a model or tool can be busy without producing output. Use `/interrupt` to cancel, or set `idle_warning_seconds = 0` to disable these notices.
-
-## Participate from the CLI
-
-Type ordinary text to speak; humans do not need the floor. A new room opens with an idea prompt: send your goal, constraints, and acceptance criteria to start discussion automatically. A recovered or manually paused room clearly asks for `/resume` instead.
-
-The terminal takes inspiration from [Claude Code's terminal interaction](https://code.claude.com/docs/en/interactive-mode): a conversation-first layout, a simple `❯` prompt between thin rules, warm accent colors, and commands revealed when needed. The main surface follows your terminal's background instead of painting a dashboard. There are no permanent navigation tabs; the phase and member states sit near the composer. Guidance appears when there is something to act on, such as a pause, error, or disconnect.
-
-Committed messages use compact speaker markers; each member's streaming reply remains separate and is labeled `live · not published`. Successful publication replaces that draft with a committed message. A conversation-only member is labeled as chatting, not writing, even while another member implements. Private reasoning and raw tool output are not shown. Names have consistent colors without assigning fixed roles.
-
-Open details only when you need them:
-
-- `/chat` or **F2**: public messages and live drafts.
-- `/plan`, `/tasks`, or **Ctrl-T / F3**: the current proposal, votes, milestones, judgments, and checks.
-- `/consensus`: approved documents and version history.
-- `/activity` or **Ctrl-O / F4**: operational notices and complete error details, kept out of the main conversation.
-- `/help`, **F1**, or **? on empty input**: shortcuts and command explanations. `/status` and `/sessions` open dedicated detail views.
-
-Ctrl-O and Ctrl-T toggle their detail views; Escape dismisses suggestions first, then returns from a detail view to the conversation. Navigation preserves your draft and never interrupts the team. Question marks in an existing draft remain ordinary text. `/chat` and `/activity` are terminal-only actions; `--plain` keeps its existing line-input/JSONL protocol. Activity contains events received by this terminal, not a replay of all past operational events; the complete durable log remains available through `agent-team history --json`.
-
-**Enter sends the entire draft. Alt+Enter or Ctrl-J inserts a newline.** The composer starts at one row and grows with wrapped or multiline text, using fewer rows in small terminals. Bracketed multiline paste stays in the editor until you explicitly send it. Type `/` to open action suggestions with descriptions; Tab and Shift-Tab select a suggestion. When a suggestion is selected, Enter accepts the completion first, and another Enter executes it. Invalid commands remain editable instead of losing the draft.
-
-**PgUp/PgDn and mouse scrolling hold a stable reading snapshot.** New messages and streaming updates remain in memory without moving your view; a notice counts new committed messages. Ctrl-End or F2 returns to the latest conversation. This is a viewport choice, not truncation: no message or draft length budget is introduced. Long input also scrolls within the composer without a text-length cap.
-
-Disconnecting leaves the visible conversation and unsent draft available, but disables sending; leave and rejoin to reconnect. Requests with uncertain delivery are retained in Activity and are never automatically replayed. Drafts and transient activity are local to the client and are not saved across closing it.
-
-**Ctrl-C exits immediately when there is no active work and no unsent draft**, including at the initial idea prompt. While agents or checks are active, the first Ctrl-C requests interruption and pause; another Ctrl-C confirms exit. An idle unsent draft also requires confirmation, but does not send an interrupt. Escape, editing, or opening another view cancels confirmation without discarding the draft. A rapid double press drains its queued interrupt to the transport before closing; this is not a server acknowledgement. If the transport stalls, another Ctrl-C forces local exit, and delivery may remain uncertain.
-
-Ctrl-D and `/quit` remain available; they confirm before discarding a draft or leaving an owner terminal. Leaving `agent-team`, `start`, or `demo` closes its server and cancels any remaining work. Leaving a `join` client does not stop the server: use Ctrl-D or `/quit` to leave it without interrupting active agents. Use `/interrupt` when you want to cancel and pause without leaving.
-
-The visual reference does not change permissions or team control: Escape never interrupts agents, and Shift-Tab never changes permission mode. These remain agent-team's own controls, not a copy of every Claude Code binding.
+Enter sends the complete draft; Alt+Enter or Ctrl-J inserts a newline. Multiline paste waits for explicit submission. Type `/` for command suggestions. PgUp/PgDn or mouse scrolling holds your reading position; Ctrl-End returns to the latest conversation. Escape dismisses suggestions or detail views without interrupting agents or discarding your draft.
 
 | Command | Effect |
 | --- | --- |
-| `/pause` | Finish all active replies, then pause |
-| `/interrupt` | Cancel all active turns and their process groups, then pause without leaving |
-| Ctrl-C | Exit if idle with no draft; otherwise interrupt active work or protect the draft, then press again to exit |
-| `/resume` | Continue automatically without a round budget |
-| `/retry [agent]` | In chatroom mode, retry one unavailable member or all members; no silent retry loop |
-| `/redirect text` | Revoke active turns and reopen planning with explicit new guidance |
-| `/revise text` | Reopen the agreement for discussion, preserving old records and existing work |
-| `/next [agent]` | Advance one eligible agent turn; authors cannot judge themselves |
-| `/status` | Show phase, active thinkers, writer, runtime failures, and turn count |
-| `/sessions` | Show private session IDs, acknowledged public-message cursors, and uncertain turns |
-| `/reset-session [agent]` | While idle, discard one or all private-session references and pause; preserve public history and files |
-| `/plan`, `/tasks` | Show consensus, shared milestones, contribution revisions, judgments, and checks |
-| `/consensus` | Read the latest approved document, its path, and version history |
-| `/history [id]` | Read a page of 100 messages after an event ID; paging does not truncate messages |
+| `/pause` / `/interrupt` | Finish active replies, then pause / cancel active turns and pause |
+| `/resume` / `/retry [agent]` | Resume the team / retry one or all unavailable members |
+| `/revise text` / `/redirect text` | Stop active work and reopen discussion with new guidance |
+| `/next [agent]` | Run one eligible turn, then pause |
+| `/plan`, `/tasks`, `/consensus` | Inspect work, votes, judgments, and approved documents |
+| `/activity`, `/status`, `/sessions` | Inspect errors, team state, and private-session synchronization |
+| `/reset-session [agent]` | While idle, forget private-session references and pause; retain public history and files |
+| `/chat` / `/help` | Return to the conversation / show commands and shortcuts |
 | `/quit` or Ctrl-D | Leave this terminal |
 
-In chatroom mode, ordinary human messages add context without cancelling work or resetting an agreed plan. Use `/redirect text` to change direction explicitly. New guidance after completion or an explicit blocker starts planning again. Serial mode still treats every human message as a redirect. Interrupted replies are not committed, but existing file changes remain: no automatic rollback. Agents are instructed to inspect interrupted work before continuing.
+**Ctrl-C exits immediately when idle with no draft.** During active work, the first press requests interruption and another confirms exit. An unsent draft also requires confirmation; Escape or editing cancels it. If delivery stalls, another Ctrl-C forces local exit without guaranteeing delivery.
 
-Manual pauses and recovery require `/resume`. In chatroom mode, resolve any member failure and wait for all interrupted turns to stop, then use `/retry agent`, `/retry`, or `/resume`. A targeted retry clears only that member's failure; the team remains paused if another failure is outstanding. `/resume` retries all failures. Ordinary messages, redirects, and private-session resets do not clear a failure or resume the team. Cancellation preserves committed history, consensus documents, and existing files; it does not roll back partial tool side effects. No quota-reset time is guessed and no automatic retry loop runs. Human presence does not control scheduling: disconnecting does not pause, and reconnecting does not resume a paused room. Explicit `/pause` and `/interrupt` still take effect when everyone subsequently leaves.
+**Any agent call failure pauses the entire team** and interrupts other active turns. Read `/activity`, resolve the issue, wait for cancellation cleanup, then use `/retry [agent]` or `/resume`. A targeted retry cannot resume while another failure remains. Ordinary messages and redirects do not clear failures. There is no automatic retry loop, quota-reset guess, or waiver of required votes. Cancellation never rolls back file changes already made.
 
-## Shared context and recovery
-
-SQLite stores ordered public messages and floor events. A reply, its workflow snapshot, and the agent's acknowledged session cursor are committed in one transaction. The public record is the authority; private sessions are disposable working memory.
-
-The default `context_mode = "session"` gives each Codex or Claude agent its own resumable session. Chatroom mode starts native processes lazily on first work and keeps them alive across successful turns: Codex uses the bidirectional `app-server` protocol; Claude uses streaming JSON input/output with the control protocol. Connections use the installed CLIs and their local authentication, not a replacement model API. Pausing or losing human clients does not close healthy connections. Cancellation, transport failure, explicit session replacement, or server shutdown can close them. Serial mode still starts a CLI process per turn.
-
-The first invocation gets the full public transcript. Later invocations get missing public messages. In chatroom mode, the cursor advances only to the acknowledged input boundary; separately recorded own-message IDs avoid repeating the author's reply. It must not jump to the author's newly committed message ID, because concurrent peer messages before that ID might not have reached the author. Message, workflow, and session acknowledgements are committed atomically. Serial mode retains its reply-boundary cursor optimization.
-
-Every turn also receives the shared responsibilities, any explicitly configured additional focus, current phase instructions, the current workflow, latest human guidance as an explicit reminder, and file paths reported changed since synchronization. Those paths are not an exhaustive filesystem diff: agents must re-read relevant files before editing or judging. Important decisions, findings, and test results must be published rather than kept only in private notes.
-
-Set `context_mode = "full"` for the entire public transcript and a fresh, nonpersistent private conversation per invocation. Codex can create fresh threads within its resident server; Claude restarts its process in this explicit compatibility mode. Mock and custom command backends remain stateless and always receive full context. Their room workers are resident, but custom commands still run once per invocation. For a one-off fresh judgment, interrupt and wait for all active turns, then use `/reset-session agent-name` and `/next agent-name` with an eligible peer's name.
-
-Shared public context does not mean identical private histories, system prompts, internal reasoning, or model caches. Native CLI compaction can change private memory; current team state is injected again on every turn.
-
-Consensus requires explicit approval of the same proposal version by every member, including the proposer on a later turn. A new proposal clears votes; an objection revokes existing approvals. Ordinary textual agreement, silence, and `[[PASS]]` are not votes.
-
-The same `--session` recovers history and state, initially paused. Clean private sessions resume their exact IDs after `/resume`; no `--last` or `--continue` lookup is used. Before invoking a backend, the coordinator durably marks its session uncertain. Cancellation, timeout, malformed actions, wrong IDs, or unfinished invocations invalidate that reference. The next authorized turn rebuilds from the complete public transcript, never blindly resuming uncommitted private work.
-
-Agent configuration changes and invalid saved cursors trigger full reconstruction. In serial mode, an explicit missing-session rejection before model activity can rebuild once automatically. Chatroom connection failures pause the team and invalidate the failed and interrupted private-session references; `/retry` reconstructs those contexts from public history. Ambiguous failures are never automatically replayed, because tool side effects may already have occurred.
-
-A restarted judgment requires fresh peer approvals; a restarted integration review or verification restarts all integration reviews. Existing databases gain the private-session table without rewriting public messages. Changing members or workspace still requires a new room. Resetting a private session does not delete provider transcripts, public history, or project files. Vendor transcripts remain in each CLI's normal local storage and follow its retention policy.
-
-## Configuration and extensions
-
-`workspace` is resolved relative to the configuration file and must exist. The default `workflow = "build"` requires at least two agents for independent judgment. Use `workflow = "discussion"` for chat-only use, which also supports one agent.
-
-| Setting | Default | Meaning |
-| --- | --- | --- |
-| `context_mode` | `"session"` | Resume CLI sessions and synchronize new public messages; `"full"` starts fresh every turn |
-| `interaction_mode` | `"serial"` when omitted | `"chatroom"` enables independent resident members and concurrent publication; selected by the shipped configuration and init template |
-| `permission_mode` | `"phase_scoped"` when omitted | `"full_auto"` enables Codex full access and Claude auto; selected explicitly in the shipped configuration and init template |
-| `turn_timeout` | 0 | Opt-in hard deadline per discussion/planning invocation, in seconds; 0 disables |
-| `work_timeout` | 0 | Opt-in hard deadline per implementation, judgment, or integration-review invocation, in seconds; 0 disables |
-| `check_timeout` | 0 | Opt-in hard deadline per acceptance command, in seconds; 0 disables |
-| `idle_warning_seconds` | 120 | Warn once per period without observable output; never terminates work; 0 disables |
-| `turn_delay` | 0.8 | Delay between invocations of a member; chatroom peers do not wait for each other's delay |
-
-The old `max_turns`, `max_work_turns`, and `max_context_chars` settings have been removed. Old configurations receive a migration error asking you to remove them, instead of silently retaining limits.
-
-Add more `[[agents]]` entries to extend the team. Backends can repeat under different names or models. Supported backends: `claude`, `codex`, `mock`, and `command`.
-
-The optional per-agent `role` field defaults to an empty string: no extra focus. Shared responsibilities are always supplied separately and identically to all members. Use `role` only for a task-specific additional perspective, such as paying extra attention to security risks; it does not replace those responsibilities or affect permissions, scheduling, or ownership. Existing explicit `role` values remain supported as additional focus instructions. Remove them to use the uniform default. Changes to this field or the prompt protocol rebuild affected private sessions on the next authorized turn, preserving public history and files. Upgrading from the old default roles also rebuilds private sessions so old role instructions are not resumed.
-
-```toml
-[[agents]]
-name = "other"
-backend = "command"
-command = ["python3", "/absolute/path/to/adapter.py"]
-# Optional, only when this task needs an extra focus:
-# role = "Pay extra attention to security risks while participating in all shared work."
-```
-
-Custom commands run in the workspace without shell concatenation. They receive the full UTF-8 prompt on stdin and return JSONL on stdout; stderr carries diagnostics. `AGENT_TEAM_PHASE` is `planning`, `implementation`, `judging`, `review`, chat-only `discussion`, or `chat` for conversation alongside formal work. Custom backends must honor these phase permissions themselves.
-
-```json
-{"type":"delta","text":"Here is my contribution."}
-{"type":"done"}
-```
-
-A successful custom-command invocation needs both a completion event and exit code 0. An error, nonzero exit, missing completion, or enabled hard timeout fails the member in chatroom mode, or pauses the room in serial mode. Resident native turns finish on a successful protocol result while the process stays alive. Idle notices do not cancel work. Partial replies are never accepted as deliveries. A transport completion event does not mean the project is completed.
-
-Build responses also need a final workflow action; see [docs/protocol.md](docs/protocol.md). [examples/command_agent.py](examples/command_agent.py) demonstrates transport only and is intended for discussion mode. The built-in mock executes only its fixed demo and refuses to overwrite different existing content.
-
-## Permissions and operational boundaries
-
-In chatroom mode, `permission_mode = "full_auto"` is coordinated with the workspace lease:
-
-- Codex `turn/start` explicitly sets `approvalPolicy: "never"`. The assigned implementation writer receives `sandboxPolicy.type: "dangerFullAccess"`; all other model turns receive `readOnly`. Formal readers and workspace writers never overlap.
-- Claude stays in `auto` with `--permission-prompts none`. A registered `PreToolUse` control callback permits write/Bash tools only during an assigned implementation invocation. Formal read turns allow `Read/Glob/Grep`; conversation-only turns deny tools. An empty allowed hook result leaves the normal auto checks in place; it does not bypass them. The CLI must confirm and retain auto mode.
-
-This lease coordinates cooperative members; it is not isolation from a malicious full-access writer, external editors, or background processes. Writers must not leave background tools running beyond a checkpoint. Do not treat conversational observations of a changing workspace as formal review approval.
-
-In legacy serial mode, `full_auto` retains the previous behavior on each invocation and resume:
-
-- Codex: `--sandbox danger-full-access -c approval_policy='"never"'`. Codex has no local filesystem/network sandbox and does not ask for approval. This applies during planning and review as well as implementation: instructions not to modify files in those phases are workflow rules, not an enforced Codex read-only boundary. Full access is not permission for unrelated changes, commits, pushes, or deployments.
-- Claude Code: `--permission-mode auto --permission-prompts none`. Its auto checks still apply; this is not `bypassPermissions`. The application adds no `--allowedTools` rules in this mode, so it does not pre-approve entire tools. Tool availability remains phase-specific: `Read/Glob/Grep` for planning and review, plus `Edit/Write/Bash` for implementation, and no tools for chat-only discussion. Requests that still need a native permission prompt cannot be answered by this headless host. The CLI must confirm `permissionMode: "auto"`; a missing confirmation or reported mode change fails the turn, without falling back to permission bypass. Existing CLI rules, hooks, and administrator policies remain applicable.
-
-Auto mode depends on CLI, model, provider, and account support. If unavailable or denied by policy, resolve that issue or explicitly choose `phase_scoped`; the application does not change models or disable permission policies for you. Neither auto mode nor post-hoc peer judgment is an operating-system sandbox. Use a disposable container or VM when filesystem/network isolation is required.
-
-`permission_mode = "phase_scoped"` preserves the earlier behavior and is the default for configurations that omit this key. Planning, judgment, and integration review use Codex `read-only` or Claude `dontAsk` with only `Read/Glob/Grep`. Implementation uses Codex `workspace-write` or Claude `acceptEdits` with its read/write/Bash allowlist. Both policies are passed explicitly on every invocation. Changing the team permission mode and restarting rebuilds private sessions on the next authorized turn, preserving public history and files. `/status` exposes the configured mode, and `doctor` prints it without calling a model.
-
-Acceptance commands still run as agreed argv arrays without an implicit shell; they do not inherit a native CLI sandbox from either mode.
-
-Claude tool permissions, custom backends, and coordinator checks are not OS sandboxes. Local CLI settings can also apply. Use trusted agents and projects; the coordinator is not isolation against malicious processes. Automatic commits, pushes, and deployments are outside the default workflow.
-
-A workspace lock prevents multiple build rooms from writing the same project through this application. It cannot prevent external editors from modifying files. The server listens only on `127.0.0.1`; clients authenticate with the random token in a `0600` connection file. Slow clients may disconnect so they cannot block the team; reconnecting replays committed history, while live uncommitted deltas are transient.
-
-## Tests, history, and automation
+Leaving `agent-team` or `start` stops its server but retains history. For unattended work, use separate terminals in the same project directory:
 
 ```bash
-uv run agent-team history                    # Markdown public conversation
-uv run agent-team history --json             # All durable events as JSONL
-uv run agent-team history > discussion.md
-uv run agent-team join --plain               # Line input / JSONL output
-uv run python -m unittest discover -s tests -v
+agent-team serve                 # Terminal 1; requires an existing team.toml
+agent-team join --name observer  # Terminal 2
+```
+
+Keep the foreground `serve` process alive. Leaving a `join` client with Ctrl-D or `/quit` does not stop or pause the team, even with no humans online; Ctrl-C still interrupts active work. From another directory, pass the same absolute `--session` path. Disconnected clients retain their visible history and draft until closed; leave and rejoin to reconnect. Uncertain requests are never automatically replayed.
+
+## Configuration and safety
+
+Edit [team.toml](team.toml) for settings. `workflow = "build"` requires at least two agents; `"discussion"` is chat-only and supports one. Add `[[agents]]` entries with unique names to use more agents or different models. Supported backends are `claude`, `codex`, `mock`, and `command`. An optional `role` adds a focus without changing shared responsibilities or permissions.
+
+| Setting | Options / behavior |
+| --- | --- |
+| `interaction_mode` | `"chatroom"` for concurrent resident members; `"serial"` for single-floor turns |
+| `context_mode` | `"session"` resumes private sessions; `"full"` uses fresh private conversations and full public context |
+| `permission_mode` | `"full_auto"` or `"phase_scoped"`; see below |
+| `turn_timeout`, `work_timeout`, `check_timeout` | Opt-in deadlines in seconds; `0` disables them |
+| `idle_warning_seconds`, `turn_delay` | Inactivity notice interval and per-member delay; defaults are 120 and 0.8 seconds |
+
+Generated configuration selects `chatroom` and `full_auto`; older configurations omitting those keys retain `serial` and `phase_scoped`. In chatroom/full-auto mode, only the assigned Codex writer gets unrestricted access; other turns are read-only. Claude uses auto approval with a host-side guard against unassigned tools, not permission bypass. In serial/full-auto mode, Codex has full access even during planning and review.
+
+Use `phase_scoped` for phase-specific restrictions. Custom adapters and coordinator acceptance commands do not inherit a native CLI sandbox. A write lease cannot constrain malicious processes or external editors; use a container or VM when isolation is required. Automatic commits, pushes, and deployments are outside the default workflow. The server listens on loopback and authenticates clients with a private connection token.
+
+Custom commands receive a UTF-8 prompt on stdin and return JSONL deltas plus a completion event, with exit code 0. They must honor phase permissions themselves. See the [transport example](examples/command_agent.py) and [workflow protocol](docs/protocol.md) for integration details.
+
+## Development and exports
+
+```bash
+uv run python -m unittest discover -s tests
 uv run ruff check .
 uv run ruff format --check .
 uv build
+agent-team history --json        # Export all durable events; omit --json for Markdown messages
+agent-team join --plain          # Line input / JSONL output; stdin EOF leaves the room
 ```
 
-Keep stdin open while observing a `--plain` session; EOF means leave.
-
-Optional live smoke tests consume account quota: `uv run python scripts/smoke_live.py` checks shared context, and `uv run python scripts/smoke_workflow.py` checks consensus, shared implementation, immediate judgments, integrated review, and real acceptance commands in a temporary workspace.
-
-These automation scripts use their own finite test budgets, independent of the unbounded runtime defaults. A smoke-test timeout means the test budget was exceeded, not that an agent was necessarily stuck.
-
-`uv run python scripts/smoke_sessions.py` verifies that each real CLI retains its exact session ID and remembers an earlier token across separate processes. Use `--backend codex` or `--backend claude` to select one.
-
-`uv run python scripts/smoke_resident.py` verifies private memory and the same live process/session across two native invocations. `--backend claude --check-write-guard` also exercises a denied native Write call in a temporary workspace. These checks consume account quota, preserve provider transcripts, and close their own resident process groups afterward.
-
-Code entry points: `chatroom.py` handles independent workers and write leases; `resident.py` handles bidirectional native connections; `workflow.py` handles consensus and reciprocal judgment; `engine.py` retains the serial scheduler; `verification.py` executes checks; `adapters.py` handles serial/custom CLIs; `sessions.py` manages private context; `server.py` handles rooms and locks; `client.py` handles client transport and plain mode; `tui.py` provides the terminal presentation and keyboard interaction.
-
-Integration references: [Codex App Server](https://learn.chatgpt.com/docs/app-server), [Codex noninteractive mode](https://learn.chatgpt.com/docs/non-interactive-mode), [Claude streaming CLI](https://code.claude.com/docs/en/cli-reference), [Claude tool hooks](https://code.claude.com/docs/en/agent-sdk/hooks), [Claude control protocol source](https://github.com/anthropics/claude-agent-sdk-python/blob/main/src/claude_agent_sdk/_internal/query.py).
+Optional [live smoke tests](scripts/) consume account quota and use bounded test deadlines, independent of runtime limits. Detailed references: [scheduling](docs/protocol.md#concurrent-room-scheduling), [consensus and revisions](docs/protocol.md#versioned-consensus-documents-and-revision), [recovery](docs/protocol.md#pausing-recovery-and-floor-control), and [private sessions](docs/protocol.md#private-session-synchronization).
