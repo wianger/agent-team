@@ -103,6 +103,28 @@ class PresentationTests(unittest.TestCase):
         for text in ("Online: user", "Nothing to add", "Proposal changed", "Still waiting"):
             self.assertIn(text, details)
 
+    def test_team_failure_shows_pause_cleanup_and_explicit_recovery(self):
+        self.view.handle(
+            welcome(
+                reason="error",
+                messages=2,
+                active_turns=[turn("b", "member_b")],
+                runtimes={"member_a": {"state": "failed", "error": "Quota exhausted"}},
+            )
+        )
+        self.assertIn("stopping active turns", self.view.phase())
+        self.assertIn("Wait for cleanup", self.view.guidance())
+        self.view.handle(
+            {"type": "turn.finished", "turn_id": "b", "speaker": "member_b", "outcome": "cancelled"}
+        )
+        self.view.handle(welcome(reason="error", messages=2))
+        self.assertEqual(self.view.phase(), "Paused · a team call failed")
+        self.assertIn("/retry [agent] or /resume", self.view.guidance())
+        self.assertIn("resolve the error", self.view.guidance())
+        self.view.handle(welcome(reason="error", messages=2, interaction_mode="serial"))
+        self.assertIn("/resume", self.view.guidance())
+        self.assertNotIn("/retry", self.view.guidance())
+
     def test_concurrent_drafts_are_distinct_and_replaced_by_committed_messages(self):
         for event in (
             turn(),

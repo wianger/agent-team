@@ -227,6 +227,12 @@ class RoomView:
             return "Completed · agreed acceptance checks passed"
         if reason == "document_error":
             return "Paused · consensus document needs attention"
+        if reason == "error":
+            return (
+                "Pausing · stopping active turns after an error"
+                if self.turns
+                else "Paused · a team call failed"
+            )
         if self.state.get("paused") and reason != "waiting":
             return "Pausing · active turns are finishing" if self.turns else "Paused · " + label
         if reason == "degraded":
@@ -253,6 +259,15 @@ class RoomView:
             return "The team needs your input. Read its latest message and provide guidance."
         if reason == "document_error":
             return "Resolve the consensus document path, then /resume. See Activity for details."
+        if reason == "error":
+            if self.turns:
+                return "Stopping active turns after an error. Wait for cleanup before retrying."
+            retry = (
+                "/retry [agent] or /resume"
+                if self.state.get("interaction_mode") == "chatroom"
+                else "/resume"
+            )
+            return f"Team paused. Check Activity, resolve the error, then {retry}."
         if self.state.get("paused") and reason != "waiting":
             if self.turns:
                 return "Waiting for active turns to finish. /interrupt cancels them immediately."

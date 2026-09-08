@@ -29,6 +29,8 @@ HELP = """Type a message to participate.
 /help           Show help
 /quit           Leave this terminal (Ctrl-D)
 Chatroom messages join the conversation without interruption; /redirect changes direction.
+Any failed team call pauses the whole room and interrupts its active turns.
+Resolve the issue and wait for active turns to stop, then /retry [agent] or /resume.
 Legacy serial mode still interrupts on ordinary human messages. Use /resume after a manual pause.
 """
 REASONS = {
@@ -37,13 +39,13 @@ REASONS = {
     "restart": "History recovered; /resume to continue",
     "user": "Paused",
     "step_complete": "Single turn complete",
-    "error": "Call failed; resolve and /resume",
+    "error": "Team paused after a failed call; resolve the issue and /resume",
     "all_passed": "All agents yielded; waiting for human input",
     "no_consensus": "All agents yielded without consensus; add guidance or /resume",
     "blocked": "Waiting for human input",
     "completed": "Work and acceptance checks completed",
     "waiting_messages": "Members are listening for new messages",
-    "degraded": "A member is unavailable; others can continue. Use /retry",
+    "degraded": "A member is unavailable; resolve the issue and use /retry",
     "document_error": "Consensus document needs attention; resolve the path and /resume",
 }
 

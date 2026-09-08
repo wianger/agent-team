@@ -105,6 +105,9 @@ class ChatRoom(Room):
     def refresh_active(self):
         self.active = next((m.active.public() for m in self.members.values() if m.active), None)
 
+    def failed_members(self):
+        return [name for name, member in self.members.items() if member.error is not None]
+
     def cancel_active(self, *, exclude=None):
         self.revision += 1
         for member in self.members.values():
@@ -157,7 +160,9 @@ class ChatRoom(Room):
                 **({"workflow": self.workflow.snapshot()} if self.workflow else {}),
             )
         )
-        self.reason = "user" if self.manual_paused else "running"
+        self.reason = (
+            "error" if self.failed_members() else "user" if self.manual_paused else "running"
+        )
         self.state()
         self.wake.set()
 
@@ -181,6 +186,10 @@ class ChatRoom(Room):
                 raise ValueError("Send an idea first")
             if self.workflow and self.workflow.phase == "completed":
                 raise ValueError("Idea completed; send new guidance")
+            if self.failed_members() and self.active:
+                raise ValueError("Wait for all interrupted turns to stop before retrying the team")
+            if action == "next" and target and any(n != target for n in self.failed_members()):
+                raise ValueError("Other members are unavailable; use /retry or /resume first")
             if action == "next" and self.active:
                 raise ValueError("Use /interrupt and wait for all active turns before /next")
             if action == "next" and self.workflow:
@@ -196,6 +205,9 @@ class ChatRoom(Room):
             self.next_target = target if self.single_step else None
         else:
             raise ValueError(f"Unknown control action: {action}")
+        if self.failed_members():
+            self.manual_paused, self.reason = True, "error"
+            self.single_step, self.next_target = False, None
         self.emit("room.control", action=action, target=target)
         self.state()
         self.wake.set()
@@ -220,6 +232,9 @@ class ChatRoom(Room):
     def dispatch(self):
         if not self.messages:
             return
+        if self.failed_members():
+            self.manual_paused, self.reason = True, "error"
+            return  # Do not finalize agreement or schedule work until an explicit retry.
         if self.manual_paused and self.document_error:
             return  # A failed document export is retried only after an explicit resume.
         phase = self.workflow.phase if self.workflow else "discussion"
@@ -302,8 +317,6 @@ class ChatRoom(Room):
                 self.launch(name, phase, "chat")
         active = any(m.active for m in self.members.values())
         self.reason = "running" if active else "waiting_messages"
-        if any(m.error for m in self.members.values()):
-            self.reason = "degraded"
 
     async def run(self):
         while not self.closed:
@@ -358,11 +371,22 @@ class ChatRoom(Room):
             except Exception as exc:
                 if turn.fence[0] == self.revision:
                     outcome = "failed"
-                    member.error = "Turn timed out" if isinstance(exc, TimeoutError) else str(exc)
+                    member.error = (
+                        "Turn timed out"
+                        if isinstance(exc, TimeoutError)
+                        else str(exc) or type(exc).__name__
+                    )
+                    self.manual_paused, self.reason = True, "error"
+                    self.single_step, self.next_target = False, None
+                    # Revoke every in-flight reply before cancelling other invocations.
+                    # A writer keeps its lease until its own cleanup has completed.
+                    self.cancel_active(exclude=turn.turn_id)
                     self.emit("error", speaker=name, turn_id=turn.turn_id, text=member.error)
                     self.publish_system(
-                        f"{name} is unavailable: {member.error}. Other members may continue; "
-                        "required votes are not waived. Use /retry after resolving the issue."
+                        f"{name} is unavailable: {member.error}. The entire team is paused; "
+                        "all other active turns are being interrupted. Required votes are not "
+                        "waived. Resolve the issue, wait for active turns to stop, then use "
+                        "/retry or /resume to continue."
                     )
             finally:
                 if name != "system" and outcome not in {"completed", "passed", "rejected"}:

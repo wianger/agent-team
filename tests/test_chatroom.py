@@ -155,17 +155,124 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(b.calls), 1)
         self.assertEqual(room.messages[-1]["text"], "fresh")
 
-    async def test_member_failure_is_isolated_and_retry_is_explicit(self):
-        a, b = Scripted(AdapterError("Quota exhausted"), "Recovered"), Scripted("Still here")
+    async def test_member_failure_pauses_everyone_and_retry_is_explicit(self):
+        failure_gate, peer_gate = asyncio.Event(), asyncio.Event()
+        a = Scripted((failure_gate, AdapterError("Quota exhausted")), "Recovered")
+        b = Scripted((peer_gate, "Stale reply"), "Ready too", resist_cancel=True)
         room = self.start({"a": a, "b": b})
-        await self.until(lambda: room.reason == "degraded" and not room.active)
-        self.assertFalse(room.manual_paused)
+        await self.until(lambda: a.calls and b.calls)
+        failure_gate.set()
+        await self.until(lambda: room.reason == "error" and not room.active)
+        self.assertTrue(room.status()["paused"])
         self.assertIn("Quota exhausted", room.status()["runtimes"]["a"]["error"])
-        self.assertTrue(any(m["text"] == "Still here" for m in room.messages))
+        self.assertNotIn("Stale reply", [m["text"] for m in room.messages])
+        self.assertEqual(b.cancelled, 1)
+        self.assertIn("entire team is paused", room.messages[-1]["text"])
+        room.say("human", "Additional context while paused")
+        room.redirect("human", "Reconsider after recovery")
+        await asyncio.sleep(0.03)
+        self.assertTrue(room.manual_paused)
+        self.assertEqual(room.reason, "error")
         self.assertEqual(len(a.calls), 1)
+        self.assertEqual(len(b.calls), 1)
         room.control("retry", "a")
         await self.until(lambda: room.reason == "waiting_messages")
+        self.assertFalse(room.manual_paused)
+        self.assertEqual(room.failed_members(), [])
         self.assertTrue(any(m["text"] == "Recovered" for m in room.messages))
+        self.assertTrue(any(m["text"] == "Ready too" for m in room.messages))
+        self.assertIsNone(a.calls[1]["session_id"])
+        self.assertIsNone(b.calls[1]["session_id"])
+        for adapter in (a, b):
+            texts = [m["text"] for m in transcript(adapter.calls[1]["prompt"])]
+            self.assertIn("Initial idea", texts)
+            self.assertIn("Additional context while paused", texts)
+            self.assertIn("Reconsider after recovery", texts)
+
+    async def test_resume_retries_failures_and_a_repeated_failure_pauses_again(self):
+        a, b = Scripted(RuntimeError(), AdapterError("Still unavailable"), "Recovered"), Scripted()
+        room = self.start({"a": a, "b": b})
+        await self.until(lambda: room.reason == "error" and not room.active)
+        self.assertEqual(room.members["a"].error, "RuntimeError")
+        room.control("resume")
+        await self.until(lambda: len(a.calls) == 2 and not room.active)
+        self.assertEqual(room.reason, "error")
+        self.assertTrue(room.manual_paused)
+        self.assertEqual(room.members["a"].error, "Still unavailable")
+        room.control("retry")
+        await self.until(lambda: room.reason == "waiting_messages")
+        self.assertIn("Recovered", [m["text"] for m in room.messages])
+
+    async def test_targeted_retry_cannot_resume_with_another_failure_outstanding(self):
+        room = self.start({"a": Scripted(AdapterError("Quota exhausted")), "b": Scripted()})
+        await self.until(lambda: room.reason == "error" and not room.active)
+        calls = {name: len(adapter.calls) for name, adapter in room.adapters.items()}
+        room.control("retry", "b")
+        with self.assertRaisesRegex(ValueError, "Other members are unavailable"):
+            room.control("next", "b")
+        room.control("reset-session", "a")
+        room.control("pause")
+        room.control("interrupt")
+        await asyncio.sleep(0.03)
+        self.assertTrue(room.manual_paused)
+        self.assertEqual(room.reason, "error")
+        self.assertEqual(room.failed_members(), ["a"])
+        self.assertEqual(
+            calls, {name: len(adapter.calls) for name, adapter in room.adapters.items()}
+        )
+
+    async def test_peer_failure_cancels_writer_and_holds_lease_through_cleanup(self):
+        started, stopping, cleanup, failure_gate = (asyncio.Event() for _ in range(4))
+
+        class Writer:
+            async def stream(inner, prompt, *, phase):
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    stopping.set()
+                    await cleanup.wait()
+                yield "Stale checkpoint"
+
+        b = Scripted((failure_gate, AdapterError("Connection lost")))
+        config = replace(
+            demo_config(),
+            workspace=self.path,
+            interaction_mode="chatroom",
+            turn_delay=0,
+            agents=(AgentConfig("a", "mock"), AgentConfig("b", "mock")),
+        )
+        room = self.start({"a": Writer(), "b": b}, config)
+        _, proposal = parse_action(
+            MockAdapter(config.agents[0], self.path).workflow_reply(room.workflow.snapshot())
+        )
+        room.workflow.apply("a", proposal)
+        for name in room.adapters:
+            room.workflow.apply(name, {"action": "approve", "version": 1})
+        room.workflow.data["phase"] = "discussion"
+        room.publish_system("The fixture plan is ready for implementation")
+        try:
+            await self.until(lambda: started.is_set() and b.calls)
+            self.assertEqual(room.writer, "a")
+            failure_gate.set()
+            await self.until(stopping.is_set)
+            self.assertTrue(room.manual_paused)
+            self.assertEqual(room.reason, "error")
+            self.assertEqual(room.writer, "a")
+            self.assertEqual(b.calls[0]["phase"], "chat")
+            for action in ("retry", "resume", "next"):
+                with self.assertRaisesRegex(ValueError, "Wait for all interrupted turns"):
+                    room.control(action)
+            started_turns = sum(e["type"] == "turn.started" for e in self.events)
+            room.dispatch()
+            self.assertEqual(started_turns, sum(e["type"] == "turn.started" for e in self.events))
+        finally:
+            cleanup.set()
+        await self.until(lambda: not room.active)
+        self.assertIsNone(room.writer)
+        self.assertNotIn("Stale checkpoint", [m["text"] for m in room.messages])
+        self.assertEqual(room.workflow.phase, "implementation")
+        self.assertEqual(len(room.workflow.data["consensus_history"]), 1)
 
     async def test_parallel_build_preserves_consensus_judgments_and_exclusive_writes(self):
         config = replace(
@@ -202,6 +309,64 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(concurrent)
         self.assertTrue(any("rejected_action" in m for m in room.messages))
         self.assertEqual(self.store.messages(), room.messages)
+
+    async def test_peer_failure_interrupts_checks_and_rejects_late_success(self):
+        checking, cancelled, failure_gate = (asyncio.Event() for _ in range(3))
+
+        async def verify(turn_id, activity):
+            checking.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+            return [{"command": ["fixture-check"], "exit_code": 0, "output": "Stale success"}]
+
+        a = Scripted((failure_gate, AdapterError("Authentication failed")))
+        b = Scripted((asyncio.Event(), "Stale chat"))
+        config = replace(
+            demo_config(),
+            workspace=self.path,
+            interaction_mode="chatroom",
+            turn_delay=0,
+            agents=(AgentConfig("a", "mock"), AgentConfig("b", "mock")),
+        )
+        room = self.start({"a": a, "b": b}, config)
+        room.workflow.data["phase"] = "verification"
+        room.verify = verify
+        await self.until(lambda: checking.is_set() and a.calls and b.calls)
+        self.assertEqual(room.writer, "system")
+        failure_gate.set()
+        await self.until(lambda: room.reason == "error" and not room.active)
+        self.assertTrue(cancelled.is_set())
+        self.assertTrue(room.manual_paused)
+        self.assertIsNone(room.writer)
+        self.assertEqual(room.workflow.phase, "verification")
+        self.assertFalse(room.workflow.data["checks_result"])
+        self.assertNotIn("Stale chat", [m["text"] for m in room.messages])
+        self.assertNotIn("Stale success", "\n".join(m["text"] for m in room.messages))
+
+    async def test_invalid_action_and_explicit_timeout_pause_the_team(self):
+        a = Scripted('<team-action>{"action":}</team-action>', TimeoutError(), PASS)
+        config = replace(
+            demo_config(),
+            workspace=self.path,
+            interaction_mode="chatroom",
+            turn_delay=0,
+            agents=(AgentConfig("a", "mock"), AgentConfig("b", "mock")),
+        )
+        room = self.start({"a": a, "b": Scripted()}, config)
+        await self.until(lambda: room.reason == "error" and not room.active)
+        self.assertTrue(room.manual_paused)
+        self.assertIsNotNone(room.members["a"].error)
+        self.assertIsNone(room.workflow.data["proposal"])
+        room.control("retry", "a")
+        await self.until(lambda: len(a.calls) == 2 and not room.active)
+        self.assertTrue(room.manual_paused)
+        self.assertEqual(room.reason, "error")
+        self.assertEqual(room.members["a"].error, "Turn timed out")
+        room.control("resume")
+        await self.until(lambda: room.reason == "waiting_messages")
+        self.assertFalse(room.manual_paused)
 
     async def test_restart_retains_history_but_does_not_silently_resume(self):
         room = self.start({"a": Scripted("A"), "b": Scripted("B")})
@@ -249,6 +414,42 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
         object_gate.set()
         await self.until(lambda: room.reason == "waiting_messages")
         self.assertEqual(room.workflow.data["objections"], {"a": "Need evidence"})
+        self.assertFalse(list(self.path.glob("docs/agent-team/*/consensus-*.md")))
+        self.assertFalse(
+            any(e["type"] == "turn.started" and e["phase"] == "implementation" for e in self.events)
+        )
+
+    async def test_failure_does_not_finalize_a_pending_unanimous_agreement(self):
+        failure_gate, approval_gate = asyncio.Event(), asyncio.Event()
+        approval = action_reply("Agreed", {"action": "approve", "version": 1})
+        a = Scripted(approval, (failure_gate, AdapterError("Malformed transport")))
+        b = Scripted((approval_gate, approval))
+        config = replace(
+            demo_config(),
+            workspace=self.path,
+            interaction_mode="chatroom",
+            turn_delay=0,
+            agents=(AgentConfig("a", "mock"), AgentConfig("b", "mock")),
+        )
+        room = self.start({"a": a, "b": b}, config)
+        _, proposal = parse_action(
+            MockAdapter(config.agents[0], self.path).workflow_reply(room.workflow.snapshot())
+        )
+        room.workflow.apply("a", proposal)
+        room.publish_system("A proposed the fixture plan")
+        await self.until(
+            lambda: "a" in room.workflow.data["approvals"] and not room.members["a"].active
+        )
+        room.say("human", "Check another edge case before confirming agreement")
+        await self.until(lambda: len(a.calls) == 2 and b.calls)
+        approval_gate.set()
+        await self.until(lambda: set(room.workflow.data["approvals"]) == {"a", "b"})
+        failure_gate.set()
+        await self.until(lambda: room.reason == "error" and not room.active)
+        self.assertTrue(room.manual_paused)
+        self.assertEqual(room.workflow.phase, "discussion")
+        self.assertEqual(set(room.workflow.data["approvals"]), {"a", "b"})
+        self.assertEqual(room.workflow.data["consensus_history"], [])
         self.assertFalse(list(self.path.glob("docs/agent-team/*/consensus-*.md")))
         self.assertFalse(
             any(e["type"] == "turn.started" and e["phase"] == "implementation" for e in self.events)
