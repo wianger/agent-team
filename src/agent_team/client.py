@@ -235,223 +235,22 @@ async def plain_chat(
 
 
 async def terminal_chat(
-    reader: asyncio.StreamReader, writer: asyncio.StreamWriter, name: str, welcome: dict
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    name: str,
+    welcome: dict,
+    *,
+    session: Path | None = None,
+    stop_on_exit: bool = False,
 ) -> None:
-    from prompt_toolkit.application import Application
-    from prompt_toolkit.completion import WordCompleter
-    from prompt_toolkit.document import Document
-    from prompt_toolkit.key_binding import KeyBindings
-    from prompt_toolkit.layout import HSplit, Layout, Window
-    from prompt_toolkit.layout.controls import FormattedTextControl
-    from prompt_toolkit.layout.dimension import Dimension
-    from prompt_toolkit.styles import Style
-    from prompt_toolkit.widgets import Frame, TextArea
+    from .tui import TeamUI
 
-    state = {"reason": "waiting", "turns": 0, "active": None}
-    output = TextArea(text=HELP + "\n", read_only=True, scrollbar=True, wrap_lines=True)
-    live = TextArea(
-        text="Waiting for a speaker",
-        read_only=True,
-        wrap_lines=True,
-        height=Dimension(min=2, max=8),
-    )
-    pending: asyncio.Queue = asyncio.Queue()
-    replies = LiveReplies()
-
-    def append(text: str) -> None:
-        body = output.text + clean(text)
-        output.buffer.set_document(Document(body, len(body)), bypass_readonly=True)
-
-    def accept(buffer) -> bool:
-        pending.put_nowait(buffer.text)
-        return False
-
-    input_box = TextArea(
-        height=3,
-        prompt=f"{name} › ",
-        multiline=False,
-        accept_handler=accept,
-        completer=WordCompleter(
-            [
-                "/pause",
-                "/interrupt",
-                "/resume",
-                "/retry",
-                "/redirect",
-                "/next",
-                "/status",
-                "/sessions",
-                "/reset-session",
-                "/history",
-                "/plan",
-                "/tasks",
-                "/help",
-                "/quit",
-            ]
-        ),
-        complete_while_typing=False,
-    )
-    bindings = KeyBindings()
-
-    @bindings.add("c-c")
-    def interrupt(event) -> None:
-        pending.put_nowait("/interrupt")
-
-    @bindings.add("c-d")
-    def quit_chat(event) -> None:
-        event.app.exit()
-
-    @bindings.add("pageup")
-    def page_up(event) -> None:
-        output.buffer.cursor_up(count=10)
-
-    @bindings.add("pagedown")
-    def page_down(event) -> None:
-        output.buffer.cursor_down(count=10)
-
-    def status_line():
-        active = state.get("active")
-        turns = state.get("active_turns", [active] if active else [])
-        speaker = ", ".join(t["speaker"] for t in turns) or "—"
-        reason = REASONS.get(state.get("reason"), state.get("reason", ""))
-        workflow = state.get("workflow")
-        if workflow:
-            reason = PHASES[workflow["phase"]] + " · " + reason
-        return [
-            (
-                "class:status",
-                f" {reason}  ·  Thinking: {speaker}  ·  Writer: {state.get('writer') or '—'}"
-                f"  ·  Turns: {state.get('turns', 0)} (uncapped)  ",
-            )
-        ]
-
-    application = Application(
-        layout=Layout(
-            HSplit(
-                [
-                    Window(
-                        FormattedTextControl(" AGENT TEAM  /  Shared team room"),
-                        height=1,
-                        style="class:title",
-                    ),
-                    output,
-                    Frame(
-                        live, title="Independent live drafts · public after successful completion"
-                    ),
-                    Window(FormattedTextControl(status_line), height=1),
-                    input_box,
-                    Window(
-                        FormattedTextControl(
-                            " Ctrl-C Interrupt  Ctrl-D Leave  PgUp/PgDn History  /help Help"
-                        ),
-                        height=1,
-                    ),
-                ]
-            ),
-            focused_element=input_box,
-        ),
-        key_bindings=bindings,
-        full_screen=True,
-        mouse_support=True,
-        style=Style.from_dict({"title": "bg:#164e63 #ffffff bold", "status": "#67e8f9"}),
-    )
-
-    async def render_events() -> None:
-        nonlocal state
-        try:
-            async for event in event_stream(reader, welcome):
-                kind = event.get("type")
-                replies.update(event)
-                if kind == "welcome":
-                    state = event["state"]
-                    roster = ", ".join(a["name"] for a in state["agents"])
-                    append(f"Joined. Agents: {roster}. Loading complete message history.\n\n")
-                    for turn in state.get("active_turns", []):
-                        replies.update({"type": "turn.started", **turn})
-                    if state.get("permission_mode") == "full_auto":
-                        append(
-                            "[Permissions: Codex full access / Claude auto. "
-                            "Codex has no local sandbox; task scope and phase rules still apply.]\n"
-                        )
-                elif kind == "message":
-                    append(f"#{event['id']} {event['speaker']}\n{event['text']}\n\n")
-                    if event.get("rejection"):
-                        append(f"[Action not applied: {event['rejection']}]\n")
-                elif kind in {"turn.finished", "floor.released"}:
-                    if event["outcome"] in {"cancelled", "failed"}:
-                        append(
-                            f"[{event['speaker']} cancelled/failed; partial reply not committed]\n"
-                        )
-                elif kind == "agent.passed":
-                    append(f"[{event['speaker']} yielded the floor]\n")
-                elif kind == "session.state":
-                    append(describe_sessions(event))
-                elif kind == "session.rebuilt":
-                    append(f"[{event['speaker']}] {event['text']}\n")
-                elif kind == "turn.idle":
-                    append(f"[Waiting · {event['speaker']}] {event['text']}\n")
-                elif kind == "state":
-                    state = event
-                elif kind == "presence":
-                    append(f"[Online humans: {', '.join(event['names'])}]\n")
-                elif kind == "workflow.changed":
-                    append(f"[workflow] {event['text']}\n")
-                    updated = event["workflow"]
-                    previous = state.get("workflow") or {}
-                    if updated["proposal"] and (
-                        updated["version"] != previous.get("version")
-                        or updated["phase"] != previous.get("phase")
-                    ):
-                        append(describe_workflow(updated))
-                elif kind == "workflow":
-                    append(describe_workflow(event["workflow"]))
-                elif kind == "error":
-                    append(f"Error · {event.get('speaker', 'system')}: {event['text']}\n")
-                elif kind == "history.end":
-                    append(
-                        f"[History: {event['count']} messages; "
-                        f"next page /history {event['next_after']}]\n"
-                    )
-                live.text = replies.render()
-                live.buffer.cursor_position = len(live.text)
-                application.invalidate()
-        except (EOFError, ConnectionError):
-            if application.is_running:
-                application.exit(exception=ValueError("Disconnected from the session server"))
-
-    async def send_inputs() -> None:
-        while True:
-            try:
-                request = parse_input(await pending.get())
-                if request == "quit":
-                    application.exit()
-                    return
-                if request == "help":
-                    append(HELP)
-                elif isinstance(request, dict):
-                    writer.write(encode(request))
-                    await writer.drain()
-            except ValueError as exc:
-                append(str(exc) + "\n")
-            except ConnectionError:
-                if application.is_running:
-                    application.exit(exception=ValueError("Disconnected from the session server"))
-                return
-
-    tasks: list[asyncio.Task] = []
-
-    def started() -> None:
-        tasks.extend([asyncio.create_task(render_events()), asyncio.create_task(send_inputs())])
-
-    try:
-        await application.run_async(pre_run=started)
-    finally:
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+    await TeamUI(name, session=session, stop_on_exit=stop_on_exit).run(reader, writer, welcome)
 
 
-async def chat(session: Path, name: str, plain: bool = False) -> None:
+async def chat(
+    session: Path, name: str, plain: bool = False, *, stop_on_exit: bool = False
+) -> None:
     reader, writer = await connect(session, name)
     try:
         hello = await receive(reader)
@@ -460,7 +259,9 @@ async def chat(session: Path, name: str, plain: bool = False) -> None:
         if plain or not sys.stdin.isatty() or not sys.stdout.isatty():
             await plain_chat(reader, writer, hello)
         else:
-            await terminal_chat(reader, writer, name, hello)
+            await terminal_chat(
+                reader, writer, name, hello, session=session, stop_on_exit=stop_on_exit
+            )
     finally:
         writer.close()
         with contextlib.suppress(ConnectionError):

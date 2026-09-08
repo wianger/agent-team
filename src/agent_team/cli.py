@@ -108,7 +108,9 @@ async def run(args: argparse.Namespace) -> None:
                 stopped = asyncio.Event()
                 loop = asyncio.get_running_loop()
                 loop.add_signal_handler(signal.SIGTERM, stopped.set)
-                client_task = asyncio.create_task(chat(session, args.name, args.plain))
+                client_task = asyncio.create_task(
+                    chat(session, args.name, args.plain, stop_on_exit=True)
+                )
                 stop_task = asyncio.create_task(stopped.wait())
                 try:
                     done, _ = await asyncio.wait(
