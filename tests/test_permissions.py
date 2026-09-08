@@ -17,7 +17,7 @@ from agent_team.engine import Room
 from agent_team.store import Store
 from agent_team.workflow import Workflow
 
-PHASES = ("planning", "implementation", "judging", "review", "discussion")
+PHASES = ("planning", "implementation", "judging", "review", "discussion", "chat")
 
 
 class PermissionTests(unittest.TestCase):
@@ -80,15 +80,7 @@ class PermissionTests(unittest.TestCase):
                     ):
                         self.assertNotIn(flag, command)
                     self.assertIn("--strict-mcp-config", command)
-                    tools = command[command.index("--tools") + 1]
-                    self.assertEqual(
-                        tools,
-                        "Read,Glob,Grep,Edit,Write,Bash"
-                        if phase == "implementation"
-                        else ""
-                        if phase == "discussion"
-                        else "Read,Glob,Grep",
-                    )
+                    self.assertEqual(command[command.index("--tools") + 1], "default")
                     if resume:
                         self.assertEqual(command[command.index("--resume") + 1], identifier)
 
@@ -111,11 +103,49 @@ class PermissionTests(unittest.TestCase):
     def test_full_access_does_not_expand_workflow_scope(self):
         config = load_config(Path("team.toml"))
         for agent in config.agents:
-            prompt = build_prompt(agent, config, [], Workflow(config))
-            self.assertIn("Execution mode: full_auto", prompt)
-            self.assertIn("must not modify project files", prompt)
-            self.assertIn("Read and discuss only; do not modify files yet", prompt)
-            self.assertIn("Do not bypass a denied action", prompt)
+            for concurrent in (False, True):
+                with self.subTest(backend=agent.backend, concurrent=concurrent):
+                    prompt = build_prompt(
+                        agent, config, [], Workflow(config), concurrent=concurrent
+                    )
+                    self.assertIn("full_auto throughout every phase", prompt)
+                    self.assertIn("must not modify project files", prompt)
+                    self.assertIn("Read and discuss only; do not modify files yet", prompt)
+                    self.assertIn("not a tool or network restriction", prompt)
+                    self.assertIn("Do not bypass a denied action", prompt)
+
+    def test_full_auto_allows_research_in_chat_and_discussion_only_workflows(self):
+        config = load_config(Path("team.toml"))
+        for mode in ("full_auto", "phase_scoped"):
+            for lane in ("work", "chat"):
+                for concurrent in (False, True):
+                    with self.subTest(mode=mode, lane=lane, concurrent=concurrent):
+                        prompt = build_prompt(
+                            config.agents[0],
+                            replace(config, workflow="discussion", permission_mode=mode),
+                            [],
+                            concurrent=concurrent,
+                            lane=lane,
+                        )
+                        self.assertIn("do not modify files", prompt.lower())
+                        if mode == "full_auto":
+                            self.assertIn("You may use tools for research", prompt)
+                            self.assertNotIn("Do not run tools", prompt)
+                            self.assertNotIn("or use external tools", prompt)
+                        elif concurrent and lane == "chat":
+                            self.assertIn("Do not run tools", prompt)
+                        else:
+                            self.assertIn("or use external tools", prompt)
+
+    def test_full_auto_chat_research_does_not_grant_formal_work_authority(self):
+        config = load_config(Path("team.toml"))
+        workflow = Workflow(config)
+        workflow.data["phase"] = "implementation"
+        prompt = build_prompt(config.agents[0], config, [], workflow, concurrent=True, lane="chat")
+        self.assertIn("You may use tools for research", prompt)
+        self.assertIn("Do not modify files", prompt)
+        self.assertIn("Do not issue votes, checkpoints, or verdicts", prompt)
+        self.assertIn("request_revision", prompt)
 
     def test_command_backends_are_not_given_native_permission_flags(self):
         agent = AgentConfig("custom", "command", command=("custom-agent", "--flag"))

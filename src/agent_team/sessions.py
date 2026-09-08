@@ -11,8 +11,8 @@ from dataclasses import asdict
 from .config import AgentConfig, TeamConfig
 from .store import Store
 
-# Rebuild older private prompts that assigned backend-specific perspectives.
-CONTEXT_PROTOCOL = 2
+# Rebuild older private prompts that restricted full-auto research by phase.
+CONTEXT_PROTOCOL = 3
 
 
 def session_id(value: object) -> str:

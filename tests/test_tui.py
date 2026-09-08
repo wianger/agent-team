@@ -72,8 +72,8 @@ class PresentationTests(unittest.TestCase):
         self.assertIn("Alt+Enter", text)
         self.assertNotIn("/reset-session", text)
         self.assertIn("automatically", self.view.guidance())
-        self.assertIn("Codex writers", self.view.permissions())
-        self.assertIn("native nonwriters are guarded", self.view.page("status").text)
+        self.assertIn("Codex full access", self.view.permissions())
+        self.assertIn("Full auto in every phase", self.view.page("status").text)
 
     def test_recovered_manual_pause_blocker_and_completed_guidance(self):
         for reason in ("restart", "user", "step_complete"):
@@ -168,7 +168,7 @@ class PresentationTests(unittest.TestCase):
         del event["state"]["active_turns"]
         self.view.handle(event)
         self.assertIn("a", self.view.replies.turns)
-        self.assertIn("including non-writing", self.view.permissions())
+        self.assertIn("Full auto in every phase", self.view.permissions())
         self.assertIn("live · not published", self.view.page("conversation").text)
         self.assertIn("earlier draft is not replayed", self.view.page("conversation").text)
 

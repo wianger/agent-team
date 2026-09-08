@@ -4,9 +4,9 @@ Humans use messages and CLI commands. Backend authors use this protocol. Built-i
 
 Every member receives the same shared responsibilities for independent analysis, discussion, implementation, and reciprocal review. There are no backend-specific default specialties or permanent writer/reviewer roles. The optional `role` configuration field adds a task-specific focus alongside these responsibilities; it never changes phase permissions, floor eligibility, or task ownership. An empty or omitted `role` adds no focus. Current phase and contribution authorship determine who can implement or judge.
 
-Execution permissions are separate from workflow authorization. The shipped configuration selects `interaction_mode = "chatroom"` and `permission_mode = "full_auto"`. Only an assigned implementation writer receives Codex `dangerFullAccess`; other Codex turns explicitly receive `readOnly`. Claude uses `auto` with `--permission-prompts none` and a registered `PreToolUse` control callback: only the implementation writer can use write/Bash tools, formal readers can use `Read/Glob/Grep`, and conversation-only turns cannot use tools. Returning an empty allowed hook result preserves native auto checks rather than pre-approving tools. Claude must confirm and retain `permissionMode: "auto"`; other modes fail closed. These controls coordinate cooperative members, not malicious full-access processes or external writers.
+Execution permissions are separate from workflow authorization. The shipped configuration selects `interaction_mode = "chatroom"` and `permission_mode = "full_auto"`. Full-auto applies to every phase and lane, including discussion, planning, implementation, judgment, review, and chat. Codex receives `dangerFullAccess` with `approvalPolicy: "never"` on every turn, including resumed sessions. Claude uses `auto` with `--permission-prompts none` and `--tools default`, including web tools. Its registered `PreToolUse` callback does not restrict tools by phase in full-auto; it returns an empty result during an active turn to preserve native auto checks, and denies tool calls after the turn ends. Claude must confirm and retain `permissionMode: "auto"`; other modes fail closed. Native policies and host network restrictions still apply.
 
-Legacy `serial` mode retains per-invocation CLIs and full-access Codex even during non-writing phases, where non-writing is a workflow instruction. `phase_scoped` remains the fallback when the permission key is omitted: read-only/dontAsk for readers and workspace-write/acceptEdits for writers. Configuration fingerprints include interaction and permission modes; changing modes rebuilds private context, not public history.
+Legacy `serial` mode retains per-invocation CLIs with the same full-auto permissions. In full-auto, non-writing phases are workflow instructions, not sandbox or tool restrictions; all members may use tools for research but only the assigned implementation turn may modify project files. `phase_scoped` remains the fallback when the permission key is omitted: Codex uses read-only for nonwriters and workspace-write for writers; Claude uses dontAsk with Read/Glob/Grep for formal readers, acceptEdits with write/Bash tools for writers, and no tools for discussion/chat. The resident hook enforces those phase-scoped tool restrictions. Configuration fingerprints include interaction and permission modes and the context protocol version; changing them rebuilds private context from public history. These controls coordinate cooperative members, not malicious full-access processes or external writers.
 
 End formal work replies with one `<team-action>JSON</team-action>` block, after the public explanation. Plain discussion may omit it. Conversation-only turns may attach only a `request_revision` block, never an approval, checkpoint, or verdict. Interim commentary must not include action blocks. No text may follow the final block. Actions take effect only after a successfully completed invocation; transport `done` is not project completion.
 
@@ -22,7 +22,7 @@ New public messages are retained for every worker. This implementation synchroni
 
 Formal work uses a generation fence: room revision, proposal version, phase, decision epoch, and checkpoint identity/revision. New proposals, objections, checkpoints, and requested repairs invalidate older formal decisions. Late concurrent actions are stored as `rejected_action` plus `rejection`; they never alter the workflow, and the member can synchronize and reconsider. Duplicate approvals do not generate feedback loops. Unanimous discussion remains in `discussion` until outstanding formal discussion completes, then a durable system message records the transition to implementation.
 
-Discussion and eligible formal reviews can run concurrently. Writers/checks wait for all formal readers, including stale readers, to finish. Only one writer/check runner holds the lease. Other members may use the conversation-only `chat` lane while work proceeds; its output cannot approve, judge, or modify files. It may request a new discussion of the agreement as described below. Informal observations of changing files are not stable-snapshot review evidence. Custom backends must implement their phase restrictions themselves; native nonwriters use the execution controls described above. Do not leave background writers running beyond a checkpoint.
+Discussion and eligible formal reviews can run concurrently. Writers/checks wait for all formal readers, including stale readers, to finish. Only one writer/check runner holds the lease. Other members may use the conversation-only `chat` lane while work proceeds; its output cannot approve or judge, and members are instructed not to modify files. Full-auto chat may use tools for research and may request a new discussion of the agreement as described below. Informal observations of changing files are not stable-snapshot review evidence. Custom backends must honor the workflow scope themselves; native permissions follow the configured mode described above. Do not leave background writers running beyond a checkpoint.
 
 ## Proposal and consensus
 
@@ -94,7 +94,7 @@ This is the current `checkpoint`. Dependency tasks do not become available merel
 
 ## Immediate peer judgment and revision
 
-In `judging`, every member other than the checkpoint author must inspect the actual implementation. This happens after each checkpoint, not only after the entire project has been written. Judgment turns are read-only.
+In `judging`, every member other than the checkpoint author must inspect the actual implementation. This happens after each checkpoint, not only after the entire project has been written. Judgment turns must not modify project files; full-auto keeps tool and network capabilities available for inspection and research.
 
 ```json
 {"action":"judge_pass","version":1,"task_id":"T1","revision":1,"evidence":"Read module.py and checked the boundary cases; this draft is sound"}
@@ -115,7 +115,7 @@ Every revision must receive fresh judgments. Prior contributions and critiques r
 
 ## Integrated review and real verification
 
-Once all milestones are accepted, every member reviews the entire integrated result in a read-only `review` turn, including interactions with later changes:
+Once all milestones are accepted, every member reviews the entire integrated result in a non-writing `review` turn, including interactions with later changes. Full-auto permissions remain unchanged:
 
 ```json
 {"action":"review_pass","version":1,"evidence":"Inspected the module, callers, and tests against every acceptance criterion"}

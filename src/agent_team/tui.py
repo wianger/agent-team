@@ -215,11 +215,9 @@ class RoomView:
 
     def permissions(self):
         if self.state.get("permission_mode") == "full_auto":
-            if self.state.get("interaction_mode") == "chatroom":
-                return (
-                    "Auto enabled: Codex writers have full access; native nonwriters are guarded."
-                )
-            return "Auto enabled: Codex has full access, including non-writing turns."
+            return (
+                "Full auto in every phase: Codex full access; Claude auto with all built-in tools."
+            )
         return "Phase-scoped permissions. Agreed acceptance commands run in the workspace."
 
     def phase(self):

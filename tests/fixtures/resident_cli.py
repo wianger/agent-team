@@ -96,7 +96,7 @@ for raw in sys.stdin:
                     else permission,
                 }
             )
-        if prompt == "try-write":
+        if prompt == "try-write" or prompt.startswith("try-tool:"):
             waiting = str(uuid.uuid4())
             send(
                 {
@@ -105,7 +105,7 @@ for raw in sys.stdin:
                     "request": {
                         "subtype": "hook_callback",
                         "callback_id": "phase_guard",
-                        "input": {"tool_name": "Write"},
+                        "input": {"tool_name": "Write" if prompt == "try-write" else prompt[9:]},
                     },
                 }
             )

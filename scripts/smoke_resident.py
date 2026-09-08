@@ -12,10 +12,10 @@ from agent_team.config import AgentConfig
 from agent_team.resident import make_resident
 
 
-async def check(backend, check_write_guard=False):
+async def check(backend, permission_mode="full_auto", check_write_guard=False):
     with tempfile.TemporaryDirectory(prefix="agent-team-resident-smoke-") as directory:
         adapter = make_resident(
-            AgentConfig(backend, backend), Path(directory), permission_mode="full_auto"
+            AgentConfig(backend, backend), Path(directory), permission_mode=permission_mode
         )
         token = "memory-" + uuid.uuid4().hex
         print(f"{backend}: starting native resident connection", flush=True)
@@ -88,13 +88,20 @@ async def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", choices=["codex", "claude", "both"], default="both")
     parser.add_argument(
+        "--permission-mode", choices=["full_auto", "phase_scoped"], default="full_auto"
+    )
+    parser.add_argument(
         "--check-write-guard",
         action="store_true",
-        help="Also test a denied Claude Write call in a temporary workspace",
+        help="Also test a denied Claude Write call (requires --permission-mode phase_scoped)",
     )
     args = parser.parse_args()
+    if args.check_write_guard and args.permission_mode != "phase_scoped":
+        parser.error("--check-write-guard requires --permission-mode phase_scoped")
     backends = ["codex", "claude"] if args.backend == "both" else [args.backend]
-    await asyncio.gather(*(check(backend, args.check_write_guard) for backend in backends))
+    await asyncio.gather(
+        *(check(backend, args.permission_mode, args.check_write_guard) for backend in backends)
+    )
 
 
 if __name__ == "__main__":

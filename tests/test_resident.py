@@ -6,12 +6,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 from agent_team.adapters import AdapterError
 from agent_team.config import AgentConfig
 from agent_team.resident import ClaudeResident, CodexResident
 
 FIXTURE = Path(__file__).parent / "fixtures" / "resident_cli.py"
+PHASES = ("discussion", "planning", "implementation", "judging", "review", "chat")
 
 
 class FakeProcess:
@@ -41,12 +43,12 @@ class ResidentTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(*(a.close() for a in self.adapters))
         self.temp.cleanup()
 
-    def make(self, backend):
+    def make(self, backend, permission_mode="full_auto"):
         cls = FakeCodex if backend == "codex" else FakeClaude
         adapter = cls(
             AgentConfig(backend, backend, model="configured-model"),
             Path(self.temp.name),
-            permission_mode="full_auto",
+            permission_mode=permission_mode,
         )
         adapter.commands, adapter.requests = [], []
         self.adapters.append(adapter)
@@ -74,7 +76,7 @@ class ResidentTests(unittest.IsolatedAsyncioTestCase):
                     calls = [p for m, p in adapter.requests if m == "turn/start"]
                     self.assertEqual(
                         [p["sandboxPolicy"]["type"] for p in calls],
-                        ["readOnly", "dangerFullAccess"],
+                        ["dangerFullAccess", "dangerFullAccess"],
                     )
                     self.assertTrue(all(p["model"] == "configured-model" for p in calls))
                 else:
@@ -82,8 +84,97 @@ class ResidentTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("auto", adapter.commands[0])
                     self.assertIn("configured-model", adapter.commands[0])
 
-    async def test_claude_guard_blocks_nonwriter_tools_without_restarting(self):
+    async def test_codex_full_access_on_every_phase_including_reconnect_and_fresh_context(self):
+        for persist in (True, False):
+            adapter = self.make("codex")
+            for phase in PHASES:
+                with self.subTest(phase=phase, persist=persist):
+                    # Reconnects must override saved native permissions, too.
+                    identifier = adapter.result_session_id if persist else None
+                    await adapter.close()
+                    await self.ask(
+                        adapter, phase=phase, persist_session=persist, session_id=identifier
+                    )
+                    method, params = adapter.requests[-2]
+                    self.assertEqual(method, "thread/resume" if identifier else "thread/start")
+                    self.assertEqual(params["sandbox"], "danger-full-access")
+                    self.assertEqual(params["approvalPolicy"], "never")
+                    turn = adapter.requests[-1][1]
+                    self.assertEqual(turn["sandboxPolicy"], {"type": "dangerFullAccess"})
+                    self.assertEqual(turn["approvalPolicy"], "never")
+
+    async def test_codex_full_auto_never_downgrades_a_live_session(self):
+        adapter = self.make("codex")
+        for phase in PHASES:
+            await self.ask(adapter, phase=phase, session_id=adapter.result_session_id)
+        calls = [p for m, p in adapter.requests if m == "turn/start"]
+        self.assertEqual(len(adapter.commands), 1)
+        self.assertEqual(
+            [p["sandboxPolicy"] for p in calls], [{"type": "dangerFullAccess"}] * len(PHASES)
+        )
+
+    async def test_codex_phase_scoped_still_restricts_nonwriters_on_each_turn(self):
+        adapter = self.make("codex", "phase_scoped")
+        for phase in PHASES:
+            await self.ask(adapter, phase=phase, session_id=adapter.result_session_id)
+            policy = adapter.requests[-1][1]["sandboxPolicy"]
+            self.assertEqual(
+                policy,
+                {"type": "workspaceWrite", "writableRoots": [self.temp.name]}
+                if phase == "implementation"
+                else {"type": "readOnly"},
+            )
+        self.assertEqual(len(adapter.commands), 1)
+
+    async def test_claude_full_auto_keeps_all_tools_available_on_every_live_turn(self):
         adapter = self.make("claude")
+        for phase in PHASES:
+            for tool in ("Read", "Write", "Bash", "WebFetch", "WebSearch"):
+                with self.subTest(phase=phase, tool=tool):
+                    self.assertEqual(
+                        await self.ask(
+                            adapter,
+                            "try-tool:" + tool,
+                            phase=phase,
+                            session_id=adapter.result_session_id,
+                        ),
+                        "allowed",
+                    )
+        self.assertEqual(len(adapter.commands), 1)
+        command = adapter.commands[0]
+        self.assertEqual(command[command.index("--tools") + 1], "default")
+        self.assertEqual(command[command.index("--permission-mode") + 1], "auto")
+        self.assertFalse(any(m == "set_permission_mode" for m, _ in adapter.requests))
+
+    async def test_claude_full_auto_hook_preserves_native_checks_and_revokes_idle_tools(self):
+        adapter = self.make("claude")
+        adapter.send = AsyncMock()
+        event = {
+            "type": "control_request",
+            "request_id": "tool-request",
+            "request": {
+                "subtype": "hook_callback",
+                "callback_id": "phase_guard",
+                "input": {"tool_name": "Bash"},
+            },
+        }
+        adapter.events = asyncio.Queue()
+        adapter.phase = "planning"
+        await adapter.route(event)
+        # Empty output continues native auto checks; an explicit allow would bypass them.
+        self.assertEqual(adapter.send.call_args.args[0]["response"]["response"], {})
+        await adapter.route({"type": "result"})
+        await adapter.route(event)
+        output = adapter.send.call_args.args[0]["response"]["response"]
+        self.assertEqual(output["hookSpecificOutput"]["permissionDecision"], "deny")
+        adapter.events = None
+        adapter.phase = "implementation"
+        await adapter.route(event)
+        output = adapter.send.call_args.args[0]["response"]["response"]
+        self.assertEqual(output["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    async def test_claude_phase_scoped_guard_blocks_nonwriter_tools_without_restarting(self):
+        adapter = self.make("claude", "phase_scoped")
         self.assertEqual(await self.ask(adapter, "try-write"), "deny")
         pid, identifier = adapter.process.pid, adapter.result_session_id
         self.assertEqual(
@@ -94,6 +185,18 @@ class ResidentTests(unittest.IsolatedAsyncioTestCase):
             await self.ask(adapter, "try-write", phase="judging", session_id=identifier), "deny"
         )
         self.assertEqual(adapter.process.pid, pid)
+        for phase in PHASES:
+            for tool in ("Read", "Write", "Bash", "WebFetch", "WebSearch"):
+                with self.subTest(phase=phase, tool=tool):
+                    allowed = phase == "implementation" or (
+                        phase in {"planning", "judging", "review"} and tool == "Read"
+                    )
+                    self.assertEqual(
+                        await self.ask(
+                            adapter, "try-tool:" + tool, phase=phase, session_id=identifier
+                        ),
+                        "allowed" if allowed else "deny",
+                    )
 
     async def test_claude_rejects_permission_downgrade_on_a_later_turn(self):
         adapter = self.make("claude")

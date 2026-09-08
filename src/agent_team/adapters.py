@@ -82,7 +82,9 @@ def command_for(
             "--verbose",
             "--include-partial-messages",
             "--tools",
-            "Read,Glob,Grep,Edit,Write,Bash"
+            "default"
+            if permission_mode == "full_auto"
+            else "Read,Glob,Grep,Edit,Write,Bash"
             if phase == "implementation"
             else ("Read,Glob,Grep" if phase in {"planning", "judging", "review"} else ""),
             "--strict-mcp-config",

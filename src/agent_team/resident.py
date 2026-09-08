@@ -199,7 +199,7 @@ class CodexResident(JsonProcess):
             writer = phase == "implementation"
             sandbox = (
                 "danger-full-access"
-                if writer and self.permission_mode == "full_auto"
+                if self.permission_mode == "full_auto"
                 else "workspace-write"
                 if writer
                 else "read-only"
@@ -314,8 +314,10 @@ class ClaudeResident(JsonProcess):
                 and request.get("callback_id") == "phase_guard"
             ):
                 tool = request.get("input", {}).get("tool_name")
-                allowed = self.events is not None and (
-                    self.phase == "implementation"
+                active = self.events is not None and self.phase != "idle"
+                allowed = active and (
+                    self.permission_mode == "full_auto"
+                    or self.phase == "implementation"
                     or (
                         self.phase in {"planning", "judging", "review"}
                         and tool in {"Read", "Glob", "Grep"}
@@ -326,7 +328,9 @@ class ClaudeResident(JsonProcess):
                         "hookSpecificOutput": {
                             "hookEventName": "PreToolUse",
                             "permissionDecision": "deny",
-                            "permissionDecisionReason": "A workspace lease is required.",
+                            "permissionDecisionReason": "A workspace lease is required."
+                            if active
+                            else "No active agent turn.",
                         }
                     }
             elif request.get("subtype") == "can_use_tool":

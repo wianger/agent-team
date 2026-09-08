@@ -34,7 +34,7 @@ Use `agent-team doctor` to check an existing configuration and executable availa
 Idea → Discussion → Unanimous agreement → Shared implementation and peer judgment → Integration review → Acceptance checks
 
 - **Equal responsibilities:** every member can propose, challenge, implement, and review. Names and backends do not assign permanent roles. Milestones are shared work, not isolated coding assignments; agents can revise each other's implementations.
-- **Concurrent discussion, one writer:** members think independently and publish as they finish. Only one implementation or acceptance-check turn holds the workspace write lease. Formal readers finish before another writer starts; conversation-only turns may continue but cannot write, vote, or judge.
+- **Concurrent discussion, one writer:** members think independently and publish as they finish. Only one implementation or acceptance-check turn holds the workspace write lease. Formal readers finish before another writer starts; conversation-only turns may research but must not write, vote, or judge.
 - **Explicit consensus and reciprocal review:** all members must approve the same proposal version. Each implementation checkpoint needs judgment from every other member; its author cannot self-approve. Rejections carry evidence and reopen work. The critic can take the next write turn.
 - **Evidence before completion:** all members review the integrated result, then the coordinator runs the agreed acceptance commands. Failed checks reopen work. Completion means those checks passed, not that every possible defect is absent.
 
@@ -93,9 +93,9 @@ Edit [team.toml](team.toml) for settings. `workflow = "build"` requires at least
 | `turn_timeout`, `work_timeout`, `check_timeout` | Opt-in deadlines in seconds; `0` disables them |
 | `idle_warning_seconds`, `turn_delay` | Inactivity notice interval and per-member delay; defaults are 120 and 0.8 seconds |
 
-Generated configuration selects `chatroom` and `full_auto`; older configurations omitting those keys retain `serial` and `phase_scoped`. In chatroom/full-auto mode, only the assigned Codex writer gets unrestricted access; other turns are read-only. Claude uses auto approval with a host-side guard against unassigned tools, not permission bypass. In serial/full-auto mode, Codex has full access even during planning and review.
+Generated configuration selects `chatroom` and `full_auto`; older configurations omitting those keys retain `serial` and `phase_scoped`. Full-auto applies throughout both chatroom and serial modes, including discussion, planning, judgment, review, and chat: Codex uses full access without sandbox restrictions; Claude uses native auto approval with all built-in tools, including web tools, not permission bypass. No phase-specific tool restrictions are applied. Native policies and host network restrictions still apply.
 
-Use `phase_scoped` for phase-specific restrictions. Custom adapters and coordinator acceptance commands do not inherit a native CLI sandbox. A write lease cannot constrain malicious processes or external editors; use a container or VM when isolation is required. Automatic commits, pushes, and deployments are outside the default workflow. The server listens on loopback and authenticates clients with a private connection token.
+Only assigned implementation turns may modify project files. In full-auto this is a workflow instruction and scheduling rule, not a sandbox guarantee; use a container or VM when isolation is required. Use `phase_scoped` for phase-specific restrictions. Custom adapters and acceptance commands do not inherit a native CLI sandbox. Automatic commits, pushes, and deployments are outside the default workflow. The server listens on loopback and authenticates clients with a private connection token.
 
 Custom commands receive a UTF-8 prompt on stdin and return JSONL deltas plus a completion event, with exit code 0. They must honor phase permissions themselves. See the [transport example](examples/command_agent.py) and [workflow protocol](docs/protocol.md) for integration details.
 

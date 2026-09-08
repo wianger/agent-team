@@ -125,7 +125,7 @@ workflow = "build"
 context_mode = "session"
 # Independent resident agents think concurrently and publish without round-robin turns.
 interaction_mode = "chatroom"
-# Codex runs without a sandbox; Claude uses auto approval, not bypassPermissions.
+# Every phase: Codex full access; Claude auto approval with all built-in tools.
 # Use phase_scoped to restore the previous restricted execution modes.
 permission_mode = "full_auto"
 # There are no round, output-length, or shared-context limits.
