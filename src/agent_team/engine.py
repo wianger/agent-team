@@ -376,6 +376,8 @@ class Room:
             if action == "interrupt":
                 self.cancel_active()
         elif action in {"resume", "next", "retry"}:
+            if action == "resume" and not self.status()["paused"]:
+                return
             if not self.messages:
                 raise ValueError("Send an idea first")
             if action == "next" and self.active is not None:
@@ -460,6 +462,8 @@ class Room:
         options = {}
         if session_plan is not None:
             options = {"persist_session": True, "session_id": session_plan["session_id"]}
+            if getattr(self.adapters[name], "supports_session_notifications", False):
+                options["on_session"] = self.session_observer(name, turn_id, revision)
         elif phase == "recovery" and getattr(self.adapters[name], "supports_sessions", False):
             options = {"persist_session": False}
         if getattr(self.adapters[name], "supports_activity", False):
@@ -514,6 +518,14 @@ class Room:
             else None
         )
         return reply, update
+
+    def session_observer(self, name: str, turn_id: str, revision: int):
+        def remember(identifier: str) -> None:
+            if self.closed or revision != self.revision:
+                raise asyncio.CancelledError
+            self.sessions.bind(name, turn_id, identifier)
+
+        return remember
 
     def accept_reply(
         self,
@@ -626,11 +638,9 @@ class Room:
             turn_id = uuid.uuid4().hex
             through = self.messages[-1]["id"]
             session_plan = None
-            if not verifying:
-                if (
-                    not recovering
-                    and self.config.context_mode == "session"
-                    and getattr(self.adapters[name], "supports_sessions", False)
+            if not verifying and not recovering:
+                if self.config.context_mode == "session" and getattr(
+                    self.adapters[name], "supports_sessions", False
                 ):
                     session_plan = self.sessions.plan(
                         agent, through, {m["id"] for m in self.messages}
@@ -651,6 +661,7 @@ class Room:
                         self.workflow,
                         after=session_plan["synced_through"] if session_plan else 0,
                         resumed=bool(session_plan and session_plan["session_id"]),
+                        recovering=bool(session_plan and session_plan.get("dirty")),
                     )
                 )
             except ValueError as exc:
@@ -745,7 +756,10 @@ class Room:
             finally:
                 if not verifying and outcome not in {"completed", "passed", "recovered"}:
                     self.quota_retries.discard(name)
-                    self.sessions.invalidate(name, "Invocation cancelled, failed, or not committed")
+                    if not recovering:
+                        self.sessions.suspend(
+                            name, "Invocation cancelled, failed, or not committed"
+                        )
                 self.emit("floor.released", speaker=name, turn_id=turn_id, outcome=outcome)
                 self.active, self.active_task = None, None
                 self.state()

@@ -34,6 +34,7 @@ def public_messages(prompt):
 
 class SessionBackend:
     supports_sessions = True
+    supports_session_notifications = True
 
     def __init__(self, history=None):
         self.history = {} if history is None else history
@@ -46,8 +47,9 @@ class SessionBackend:
         self.override_id = None
         self.result_session_id = None
 
-    async def stream(self, prompt, *, phase="discussion", persist_session=False, session_id=None):
-        assert persist_session
+    async def stream(
+        self, prompt, *, phase="discussion", persist_session=False, session_id=None, on_session=None
+    ):
         self.result_session_id = None
         self.calls.append({"prompt": prompt, "session_id": session_id, "phase": phase})
         self.started.set()
@@ -55,6 +57,8 @@ class SessionBackend:
             raise SessionUnavailable("No conversation found with this session ID")
         identifier = session_id or str(uuid.uuid4())
         self.history.setdefault(identifier, []).append(prompt)
+        if persist_session and on_session:
+            on_session(identifier)
         if self.block:
             yield "uncommitted work"
             try:
@@ -152,7 +156,10 @@ class SessionEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pending["turn_id"], self.room.active["turn_id"])
         self.room.control("interrupt")
         await self.idle()
-        self.assertIsNone(self.store.sessions()["a"]["session_id"])
+        self.assertEqual(self.store.sessions()["a"]["session_id"], pending["session_id"])
+        self.assertIsNotNone(pending["session_id"])
+        self.assertEqual(self.store.sessions()["a"]["synced_through"], 0)
+        self.assertTrue(self.store.sessions()["a"]["dirty"])
 
     async def test_idle_notice_does_not_invalidate_or_advance_private_session(self):
         await self.step("a")
@@ -175,9 +182,9 @@ class SessionEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.room.messages), 2)
         self.room.control("interrupt")
         await self.idle()
-        self.assertIsNone(self.store.sessions()["a"]["session_id"])
+        self.assertEqual(self.store.sessions()["a"]["session_id"], saved["session_id"])
 
-    async def test_interrupted_private_history_is_not_resumed_even_if_cancellation_ignored(self):
+    async def test_interrupted_session_resumes_but_stale_output_never_commits(self):
         await self.step("a")
         old_id = self.store.sessions()["a"]["session_id"]
         backend = self.backends["a"]
@@ -192,20 +199,24 @@ class SessionEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(m["text"] == "uncommitted work" for m in self.room.messages))
         await self.step("a")
         call = backend.calls[-1]
-        self.assertIsNone(call["session_id"])
-        self.assertIn(TRANSCRIPT_MARKER, call["prompt"])
+        self.assertEqual(call["session_id"], old_id)
+        self.assertIn(DELTA_MARKER, call["prompt"])
+        self.assertIn("Session recovery:", call["prompt"])
         self.assertIn("new direction", call["prompt"])
-        self.assertNotEqual(self.store.sessions()["a"]["session_id"], old_id)
+        self.assertEqual(self.store.sessions()["a"]["session_id"], old_id)
+        self.assertEqual([m["text"] for m in public_messages(call["prompt"])], ["new direction"])
+        self.assertFalse(self.store.sessions()["a"]["dirty"])
         self.assertIn(old_id, backend.history)  # Provider transcripts are not deleted.
 
-    async def test_crash_marker_forces_full_rebuild_on_restart(self):
+    async def test_crash_marker_resumes_with_reconciliation_on_restart(self):
         await self.step("a")
         state = self.store.sessions()["a"]
         self.store.set_session("a", {**state, "dirty": True, "turn_id": "crashed"})
         await self.restart()
         await self.step("a")
-        self.assertIsNone(self.backends["a"].calls[-1]["session_id"])
-        self.assertEqual(self.store.sessions()["a"]["generation"], 2)
+        self.assertEqual(self.backends["a"].calls[-1]["session_id"], state["session_id"])
+        self.assertIn("Session recovery:", self.backends["a"].calls[-1]["prompt"])
+        self.assertEqual(self.store.sessions()["a"]["generation"], 1)
 
     async def test_missing_session_retries_once_with_full_public_history(self):
         await self.step("a")
@@ -219,17 +230,20 @@ class SessionEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len([e for e in self.events if e["type"] == "session.rebuilt"]), 1)
         self.assertEqual(len([m for m in self.room.messages if m["role"] == "agent"]), 2)
 
-    async def test_unknown_failure_pauses_and_only_next_explicit_turn_rebuilds(self):
+    async def test_unknown_failure_pauses_and_next_explicit_turn_resumes(self):
         await self.step("a")
+        saved = self.store.sessions()["a"].copy()
         backend = self.backends["a"]
         backend.replies = [AdapterError("network failure")]
         self.room.control("next", "a")
         await self.idle()
         self.assertEqual(self.room.reason, "error")
         self.assertEqual(len(backend.calls), 2)
-        self.assertIsNone(self.store.sessions()["a"]["session_id"])
+        self.assertEqual(self.store.sessions()["a"]["session_id"], saved["session_id"])
+        self.assertEqual(self.store.sessions()["a"]["synced_through"], saved["synced_through"])
         await self.step("a")
-        self.assertIsNone(backend.calls[-1]["session_id"])
+        self.assertEqual(backend.calls[-1]["session_id"], saved["session_id"])
+        self.assertIn("Session recovery:", backend.calls[-1]["prompt"])
 
     async def test_missing_session_after_partial_output_is_not_automatically_retried(self):
         await self.step("a")
@@ -248,7 +262,9 @@ class SessionEngineTests(unittest.IsolatedAsyncioTestCase):
         self.room.control("next", "a")
         await self.idle()
         self.assertEqual(self.room.reason, "error")
-        self.assertIsNone(self.store.sessions()["a"]["session_id"])
+        self.assertIsNotNone(self.store.sessions()["a"]["session_id"])
+        self.assertEqual(self.store.sessions()["a"]["synced_through"], 0)
+        self.assertTrue(self.store.sessions()["a"]["dirty"])
         self.assertFalse(any(m["role"] == "agent" for m in self.room.messages))
 
     async def test_peer_session_id_collision_is_rejected(self):
@@ -257,7 +273,10 @@ class SessionEngineTests(unittest.IsolatedAsyncioTestCase):
         self.room.control("next", "b")
         await self.idle()
         self.assertEqual(self.room.reason, "error")
-        self.assertIsNone(self.store.sessions()["b"]["session_id"])
+        self.assertNotEqual(
+            self.store.sessions()["b"]["session_id"], self.store.sessions()["a"]["session_id"]
+        )
+        self.assertTrue(self.store.sessions()["b"]["dirty"])
         self.assertEqual(len(self.room.messages), 2)
 
     async def test_human_reset_preserves_public_history_and_other_agent_session(self):
@@ -364,14 +383,16 @@ class SessionEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(public_messages(calls[-1][0])), 3)
         self.assertIsNone(self.store.sessions()["a"]["session_id"])
 
-    async def test_timeout_invalidates_session_and_leaves_no_partial_public_reply(self):
+    async def test_timeout_keeps_session_without_acknowledging_partial_reply(self):
         await self.step("a")
+        saved = self.store.sessions()["a"].copy()
         self.backends["a"].block = True
         await self.restart(replace(self.config, turn_timeout=0.02))
         self.room.control("next", "a")
         await self.idle()
         self.assertEqual(self.room.reason, "error")
-        self.assertIsNone(self.store.sessions()["a"]["session_id"])
+        self.assertEqual(self.store.sessions()["a"]["session_id"], saved["session_id"])
+        self.assertEqual(self.store.sessions()["a"]["synced_through"], saved["synced_through"])
         self.assertEqual(len(self.room.messages), 2)
 
     async def test_saved_cursor_outside_public_history_is_not_trusted(self):
@@ -547,7 +568,7 @@ class SessionProtocolTests(unittest.TestCase):
 
 
 class SessionProcessTests(unittest.IsolatedAsyncioTestCase):
-    async def invoke(self, backend, events, *, identifier=None, stderr="", code=0):
+    async def invoke(self, backend, events, *, identifier=None, stderr="", code=0, on_session=None):
         script = (
             "import json,sys; sys.stdin.read(); "
             f"[print(json.dumps(e), flush=True) for e in {events!r}]; "
@@ -563,6 +584,7 @@ class SessionProcessTests(unittest.IsolatedAsyncioTestCase):
                             "prompt",
                             persist_session=True,
                             session_id=identifier,
+                            on_session=on_session,
                         )
                     ]
                 )
@@ -600,6 +622,24 @@ class SessionProcessTests(unittest.IsolatedAsyncioTestCase):
                     stderr="No conversation found with session ID: missing",
                     code=1,
                 )
+
+    async def test_native_serial_identity_is_reported_even_when_the_turn_fails(self):
+        identifier = str(uuid.uuid4())
+        for backend, event in (
+            ("codex", {"type": "thread.started", "thread_id": identifier}),
+            ("claude", {"type": "system", "subtype": "init", "session_id": identifier}),
+        ):
+            identities = []
+            with self.subTest(backend=backend), self.assertRaises(AdapterError):
+                await self.invoke(
+                    backend,
+                    [event],
+                    identifier=identifier,
+                    code=1,
+                    stderr="Usage exhausted",
+                    on_session=identities.append,
+                )
+            self.assertEqual(identities, [identifier])
 
     async def test_session_error_after_activity_is_not_classified_as_safe_retry(self):
         identifier = str(uuid.uuid4())

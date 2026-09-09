@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-from agent_team.adapters import AdapterError, QuotaExceeded
+from agent_team.adapters import AdapterError, QuotaExceeded, SessionUnavailable
 from agent_team.config import AgentConfig
 from agent_team.resident import ClaudeResident, CodexResident
 
@@ -19,7 +19,7 @@ PHASES = ("discussion", "planning", "implementation", "judging", "review", "chat
 class FakeProcess:
     async def start_process(self, command):
         self.commands.append(command)
-        await super().start_process([sys.executable, str(FIXTURE), self.agent.backend])
+        await super().start_process([sys.executable, str(FIXTURE), self.agent.backend, *command])
 
     async def request(self, method, params):
         self.requests.append((method, params))
@@ -238,6 +238,51 @@ class ResidentTests(unittest.IsolatedAsyncioTestCase):
         adapter = self.make("codex")
         await self.ask(adapter)
         self.assertNotIn("account/rateLimits/read", [method for method, _ in adapter.requests])
+
+    async def test_early_native_identity_survives_first_turn_quota_and_resumes_after_process_exit(
+        self,
+    ):
+        for backend in ("claude", "codex"):
+            with self.subTest(backend=backend):
+                adapter = self.make(backend)
+                identities = []
+                with self.assertRaises(QuotaExceeded):
+                    await self.ask(adapter, "quota", on_session=identities.append)
+                self.assertEqual(len(identities), 1)
+                identifier = identities[0]
+                self.assertIsNone(adapter.result_session_id)
+                self.assertIsNone(adapter.process)
+                await self.ask(adapter, session_id=identifier, on_session=identities.append)
+                self.assertEqual(identities, [identifier, identifier])
+                self.assertEqual(adapter.result_session_id, identifier)
+                if backend == "claude":
+                    command = adapter.commands[-1]
+                    self.assertEqual(command[command.index("--resume") + 1], identifier)
+                    self.assertIn("auto", command)
+                else:
+                    self.assertTrue(
+                        any(
+                            method == "thread/resume" and params["threadId"] == identifier
+                            for method, params in adapter.requests
+                        )
+                    )
+                await self.ask(adapter, persist_session=False, on_session=identities.append)
+                self.assertEqual(identities, [identifier, identifier])
+
+    async def test_native_missing_session_is_reported_before_starting_a_turn(self):
+        for backend in ("claude", "codex"):
+            with self.subTest(backend=backend):
+                adapter = self.make(backend)
+                identities = []
+                with self.assertRaises(SessionUnavailable):
+                    await self.ask(
+                        adapter,
+                        session_id="00000000-0000-0000-0000-000000000404",
+                        on_session=identities.append,
+                    )
+                self.assertFalse(identities)
+                self.assertIsNone(adapter.process)
+                self.assertNotIn("turn/start", [method for method, _ in adapter.requests])
 
     async def test_cancellation_during_codex_reset_read_closes_the_process(self):
         adapter = self.make("codex")

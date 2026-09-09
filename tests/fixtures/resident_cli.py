@@ -9,6 +9,12 @@ session = None
 turns = 0
 permission = "auto"
 waiting = None
+missing_id = "00000000-0000-0000-0000-000000000404"
+
+if backend == "claude" and "--resume" in sys.argv:
+    if sys.argv[sys.argv.index("--resume") + 1] == missing_id:
+        print("No conversation found with session ID: " + missing_id, file=sys.stderr, flush=True)
+        sys.exit(7)
 
 
 def send(event):
@@ -39,6 +45,9 @@ for raw in sys.stdin:
                 }
             )
         elif method in {"thread/start", "thread/resume"}:
+            if params.get("threadId") == missing_id:
+                send({"id": event["id"], "error": {"message": "No rollout found for thread id"}})
+                continue
             session = params.get("threadId") or str(uuid.uuid4())
             send({"id": event["id"], "result": {"thread": {"id": session}}})
         elif method == "turn/start":

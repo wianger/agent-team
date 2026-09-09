@@ -112,7 +112,7 @@ class SessionUnavailable(AdapterError):
 def unavailable_session(error: str) -> bool:
     return bool(
         re.search(
-            r"(?:no (?:conversation|session) found|(?:conversation|session|thread) "
+            r"(?:no (?:conversation|session|rollout) found|(?:conversation|session|thread) "
             r"(?:with (?:id )?[^\n]+ )?(?:not found|does not exist|could not be found))",
             error,
             re.IGNORECASE,
@@ -411,6 +411,7 @@ async def drain_and_terminate(process: asyncio.subprocess.Process) -> None:
 
 class CLIAdapter:
     supports_activity = True
+    supports_session_notifications = True
 
     def __init__(
         self, agent: AgentConfig, workspace: Path, *, permission_mode: str = "phase_scoped"
@@ -429,6 +430,7 @@ class CLIAdapter:
         persist_session: bool = False,
         session_id: str | None = None,
         on_activity: Callable[[], None] | None = None,
+        on_session: Callable[[str], None] | None = None,
     ) -> AsyncIterator[str]:
         self.result_session_id = None
         new_id = str(uuid.uuid4()) if persist_session and self.agent.backend == "claude" else None
@@ -480,6 +482,7 @@ class CLIAdapter:
             if self.agent.backend == "claude" and self.permission_mode == "full_auto"
             else None,
         )
+        notified = False
         try:
             async for line in iter_lines(process.stdout, on_activity=on_activity):
                 if not line.strip():
@@ -491,6 +494,9 @@ class CLIAdapter:
                         "Invalid CLI stdout JSON; check version and command configuration"
                     ) from exc
                 delta = decoder.feed(event)
+                if persist_session and on_session and decoder.session_id and not notified:
+                    on_session(decoder.session_id)
+                    notified = True
                 if delta:
                     yield delta
             code = await process.wait()

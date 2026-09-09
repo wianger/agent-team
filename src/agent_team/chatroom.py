@@ -9,7 +9,7 @@ from contextlib import aclosing
 from dataclasses import dataclass, field
 
 from .activity import observe_activity
-from .adapters import AdapterError, QuotaExceeded
+from .adapters import AdapterError, QuotaExceeded, SessionUnavailable
 from .context import PASS, build_prompt
 from .engine import QUOTA_PROBE_PROMPT, Room
 from .resident import make_resident
@@ -200,6 +200,8 @@ class ChatRoom(Room):
                 self.members[name].seen = None
             self.manual_paused, self.reason = True, "user"
         elif action in {"resume", "next", "retry"}:
+            if action == "resume" and not self.status()["paused"]:
+                return
             if not self.messages:
                 raise ValueError("Send an idea first")
             if self.workflow and self.workflow.phase == "completed":
@@ -425,7 +427,8 @@ class ChatRoom(Room):
                     "recovered",
                 }:
                     self.quota_retries.discard(name)
-                    self.sessions.invalidate(name, "Concurrent invocation did not commit")
+                    if turn.lane != "recovery":
+                        self.sessions.suspend(name, "Concurrent invocation did not commit")
                 if self.writer == name:
                     self.writer = None
                 member.active, member.invocation = None, None
@@ -443,7 +446,6 @@ class ChatRoom(Room):
     async def invoke(self, turn):
         name = turn.speaker
         if turn.lane == "recovery":
-            self.sessions.invalidate(name, "Isolated quota recovery check")
             await self.execute_turn(
                 name, QUOTA_PROBE_PROMPT, turn.turn_id, turn.fence[0], "recovery", None
             )
@@ -480,6 +482,7 @@ class ChatRoom(Room):
                 concurrent=True,
                 lane=turn.lane,
                 known_own_messages=tuple((session_plan or {}).get("known_own_messages", [])),
+                recovering=bool(session_plan and session_plan.get("dirty")),
             )
         )
         self.emit(
@@ -510,6 +513,8 @@ class ChatRoom(Room):
             options = {}
             if session_plan:
                 options.update(persist_session=True, session_id=session_plan["session_id"])
+                if getattr(adapter, "supports_session_notifications", False):
+                    options["on_session"] = self.session_observer(name, turn.turn_id, turn.fence[0])
             elif getattr(adapter, "supports_sessions", False):
                 options["persist_session"] = False
             if getattr(adapter, "supports_activity", False):
@@ -520,16 +525,31 @@ class ChatRoom(Room):
                 else self.config.turn_timeout
             )
             parts = []
-            async with asyncio.timeout(timeout or None):
-                async with aclosing(adapter.stream(prompt, phase=phase, **options)) as stream:
-                    async for delta in stream:
-                        if turn.fence[0] != self.revision:
-                            raise asyncio.CancelledError
-                        if not isinstance(delta, str):
-                            raise AdapterError("Adapter deltas must be strings")
-                        activity()
-                        parts.append(delta)
-                        self.emit("delta", durable=False, **turn.public(), text=delta)
+            try:
+                async with asyncio.timeout(timeout or None):
+                    async with aclosing(adapter.stream(prompt, phase=phase, **options)) as stream:
+                        async for delta in stream:
+                            if turn.fence[0] != self.revision:
+                                raise asyncio.CancelledError
+                            if not isinstance(delta, str):
+                                raise AdapterError("Adapter deltas must be strings")
+                            activity()
+                            parts.append(delta)
+                            self.emit("delta", durable=False, **turn.public(), text=delta)
+            except SessionUnavailable:
+                if turn.fence[0] != self.revision or self.closed:
+                    raise asyncio.CancelledError from None
+                if parts or not session_plan or not session_plan["session_id"]:
+                    raise
+                # Only a definite pre-activity rejection permits one fresh attempt.
+                self.sessions.invalidate(name, "Saved backend session is unavailable")
+                self.emit(
+                    "session.rebuilt",
+                    speaker=name,
+                    turn_id=turn.turn_id,
+                    text="Saved session unavailable; rebuilding from the full public conversation.",
+                )
+                return await self.invoke(turn)
             if turn.fence[0] != self.revision:
                 raise asyncio.CancelledError
             reply = "".join(parts).strip()

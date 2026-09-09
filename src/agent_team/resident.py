@@ -13,11 +13,13 @@ from .adapters import (
     AdapterError,
     EventDecoder,
     QuotaExceeded,
+    SessionUnavailable,
     codex_quota_reset,
     command_for,
     drain_and_terminate,
     make_adapter,
     provider_error,
+    unavailable_session,
 )
 from .config import AgentConfig
 from .sessions import session_id as validate_session_id
@@ -29,6 +31,7 @@ class JsonProcess:
 
     supports_activity = True
     supports_sessions = True
+    supports_session_notifications = True
 
     def __init__(self, agent: AgentConfig, workspace: Path, *, permission_mode: str):
         self.agent, self.workspace, self.permission_mode = agent, workspace, permission_mode
@@ -150,8 +153,8 @@ class JsonProcess:
         process = self.process
         if not process:
             return
-        # Cancellation revokes the private turn. Kill its process group, including tools;
-        # a later authorized invocation reconstructs uncertain state from the public log.
+        # Revoke the active turn and its tools, not the persisted session identity.
+        # A later invocation resumes with explicit public-state reconciliation.
         tasks = [t for t in (self.reader_task, self.stderr_task) if t]
         for task in tasks:
             task.cancel()
@@ -189,7 +192,14 @@ class CodexResident(JsonProcess):
             self.events.put_nowait(event)
 
     async def stream(
-        self, prompt, *, phase="discussion", persist_session=True, session_id=None, on_activity=None
+        self,
+        prompt,
+        *,
+        phase="discussion",
+        persist_session=True,
+        session_id=None,
+        on_activity=None,
+        on_session=None,
     ):
         if self.events is not None:
             raise AdapterError("An agent cannot run two turns in its private session")
@@ -226,13 +236,20 @@ class CodexResident(JsonProcess):
                     params["threadId"] = validate_session_id(session_id)
                 else:
                     params["ephemeral"] = not persist_session
-                result = await self.request(
-                    "thread/resume" if session_id else "thread/start", params
-                )
+                try:
+                    result = await self.request(
+                        "thread/resume" if session_id else "thread/start", params
+                    )
+                except AdapterError as exc:
+                    if session_id and unavailable_session(str(exc)):
+                        raise SessionUnavailable(str(exc)) from exc
+                    raise
                 identifier = validate_session_id(result["thread"]["id"])
                 if session_id and identifier != session_id:
                     raise AdapterError("Codex resumed a different private thread")
                 self.connection_session = identifier
+            if persist_session and on_session:
+                on_session(self.connection_session)
             policy = {
                 "type": {
                     "danger-full-access": "dangerFullAccess",
@@ -381,7 +398,14 @@ class ClaudeResident(JsonProcess):
                 self.events.put_nowait(event)
 
     async def stream(
-        self, prompt, *, phase="discussion", persist_session=True, session_id=None, on_activity=None
+        self,
+        prompt,
+        *,
+        phase="discussion",
+        persist_session=True,
+        session_id=None,
+        on_activity=None,
+        on_session=None,
     ):
         if self.events is not None:
             raise AdapterError("An agent cannot run two turns in its private session")
@@ -391,6 +415,8 @@ class ClaudeResident(JsonProcess):
         self.events = asyncio.Queue()
         self.on_activity, self.phase = on_activity, phase
         self.result_session_id = None
+        decoder = None
+        notified = False
         try:
             if not self.process:
                 self.observed_permission = None
@@ -441,6 +467,9 @@ class ClaudeResident(JsonProcess):
                         "claude", str(exc), quota_info=decoder.quota_info, rate_limited=True
                     ) from exc
                 delta = decoder.feed(event)
+                if persist_session and on_session and decoder.session_id and not notified:
+                    on_session(decoder.session_id)
+                    notified = True
                 if delta:
                     yield delta
                 if event.get("type") == "result":
@@ -449,6 +478,15 @@ class ClaudeResident(JsonProcess):
                         raise AdapterError("Claude omitted or changed its private session ID")
                     self.result_session_id = decoder.session_id
                     return
+        except AdapterError as exc:
+            await self.close()
+            if (
+                session_id
+                and (decoder is None or not decoder.activity_started)
+                and unavailable_session(str(exc))
+            ):
+                raise SessionUnavailable(str(exc)) from exc
+            raise
         except BaseException:
             await self.close()
             raise

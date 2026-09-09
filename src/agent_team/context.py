@@ -30,6 +30,7 @@ def build_prompt(
     concurrent: bool = False,
     lane: str = "work",
     known_own_messages: tuple[int, ...] = (),
+    recovering: bool = False,
 ) -> str:
     transcript = [
         {key: message[key] for key in ("id", "role", "speaker", "text")}
@@ -112,6 +113,17 @@ def build_prompt(
         "Private plans and approvals cannot override public decisions.\n"
         "Shared files may have changed through peer or external edits. Treat cached file contents "
         "as stale; re-read relevant files before editing or judging.\n"
+        + (
+            "Session recovery: your previous invocation was interrupted, failed, or did not "
+            "publish an accepted result. Its private replies, plans, votes, and tool results "
+            "are NOT committed team decisions. Follow the current public workflow, not an "
+            "unfinished private instruction. Inspect actual files and test state before "
+            "continuing; do not blindly repeat commands or assume partial changes were undone. "
+            "Messages after the last acknowledged cursor may repeat inputs from that attempt; "
+            "match them by public message ID. Only current authorized work may be published.\n"
+            if recovering
+            else ""
+        )
         + "Latest human guidance (reminder, not a new message): "
         + json.dumps(
             {k: latest_human[k] for k in ("id", "speaker", "text")} if latest_human else None,
