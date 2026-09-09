@@ -502,6 +502,7 @@ class TranscriptWindow(Window):
         self.resume_at_bottom = False
         self.at_bottom = True
         self.rows = [(0, 0)]
+        self.lines: list[str] = []
         self.wrap_width = 80
         self.cache_key = None
         super().__init__(
@@ -521,11 +522,20 @@ class TranscriptWindow(Window):
         key = (self.content.buffer.text, width)
         if key != self.cache_key:
             anchor = self.rows[min(self.top, len(self.rows) - 1)]
+            lines = self.content.buffer.document.lines
+            unchanged = 0
+            if self.cache_key is not None and width == self.wrap_width:
+                for old, new in zip(self.lines, lines, strict=False):
+                    if old != new:
+                        break
+                    unchanged += 1
+            # Streaming typically changes only the tail. Reuse the preceding display
+            # rows so each token does not reprocess the entire conversation.
+            del self.rows[bisect_left(self.rows, (unchanged, 0)) :]
             self.wrap_width = width
-            self.rows = []
             # Match the renderer's character widths, including wide characters,
             # combining marks, expanded tabs, and continuation indentation.
-            for row in range(ui_content.line_count):
+            for row in range(unchanged, ui_content.line_count):
                 self.rows.append((row, 0))
                 used = 0
                 for col, char in enumerate(fragment_list_to_text(ui_content.get_line(row))):
@@ -535,6 +545,7 @@ class TranscriptWindow(Window):
                         used = min(4, width - 1)
                     used += size
             self.top = max(0, bisect_right(self.rows, anchor) - 1)
+            self.lines = lines
             self.cache_key = key
         maximum = max(0, len(self.rows) - height)
         if self.following():
@@ -572,7 +583,6 @@ class TeamUI:
             scrollbar=False,
             wrap_lines=True,
             lexer=self.lexer,
-            focus_on_click=True,
         )
         self.body.window = TranscriptWindow(self.body.control, lambda: self.follow)
         self.input = TextArea(
@@ -741,11 +751,17 @@ class TeamUI:
                     if event.event_type in {MouseEventType.SCROLL_UP, MouseEventType.SCROLL_DOWN}:
                         self.scroll(event.event_type == MouseEventType.SCROLL_UP, lines=3)
                         return None
-                    if (
-                        control is self.body.control
-                        and event.event_type == MouseEventType.MOUSE_DOWN
-                    ):
-                        self.freeze()
+                    if control is self.body.control:
+                        if event.event_type == MouseEventType.MOUSE_DOWN:
+                            self.freeze()
+                        # Native selection needs focus while handling the mouse, but
+                        # must not leave typing/Enter trapped in the read-only buffer.
+                        layout = self.application.layout
+                        layout.focus(self.body.window)
+                        try:
+                            return original(event)
+                        finally:
+                            layout.focus_last()
                     return original(event)
 
                 control.mouse_handler = mouse

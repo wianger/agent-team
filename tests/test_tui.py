@@ -5,10 +5,12 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.data_structures import Size
 from prompt_toolkit.document import Document
+from prompt_toolkit.formatted_text import fragment_list_to_text
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
@@ -639,6 +641,95 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
         self.ui.model.handle(message(2, "New public message"))
         self.ui.paint()
         self.assertEqual(self.ui.body.text, text)
+
+    async def test_clicking_history_keeps_typing_and_enter_in_the_composer(self):
+        self.ui.model.handle(message(1, "\n".join(f"Line {i}" for i in range(80))))
+        self.ui.application.invalidate()
+        await eventually(lambda: "Line 79" in screen_text(self.ui))
+        self.pipe.send_text("Draft")
+        await eventually(lambda: self.ui.input.text == "Draft")
+        self.pipe.send_text("\x1b[<0;5;5M\x1b[<0;5;5m")
+        await eventually(lambda: not self.ui.follow)
+        self.assertTrue(self.ui.application.layout.has_focus(self.ui.input))
+        self.pipe.send_text(" after reading\r")
+        await eventually(lambda: bool(self.writer.requests))
+        self.assertEqual(
+            self.writer.requests, [encode({"type": "say", "text": "Draft after reading"})]
+        )
+
+    async def test_dragging_history_preserves_selection_and_routes_paste_to_the_composer(self):
+        self.ui.model.handle(message(1, "\n".join(f"Line {i}" for i in range(80))))
+        self.ui.application.invalidate()
+        await eventually(lambda: "Line 79" in screen_text(self.ui))
+        # Click, drag, then release without an extra click to focus the transcript.
+        self.pipe.send_text("\x1b[<0;5;5M\x1b[<32;9;7M\x1b[<0;9;7m")
+        await eventually(lambda: not self.ui.follow)
+        self.assertIsNotNone(self.ui.body.buffer.selection_state)
+        self.assertTrue(self.ui.application.layout.has_focus(self.ui.input))
+        snapshot = self.ui.body.text
+        self.reader.feed_data(encode(message(2, "New output while reading")))
+        await eventually(lambda: 2 in self.ui.model.messages)
+        draft = "\u8865\u5145\u610f\u89c1\nSecond line"
+        self.pipe.send_text("\x1b[200~" + draft + "\x1b[201~")
+        await eventually(lambda: self.ui.input.text == draft)
+        self.assertEqual(self.ui.body.text, snapshot)
+        self.assertFalse(self.writer.requests)
+        self.pipe.send_text("\r")
+        await eventually(lambda: bool(self.writer.requests))
+        self.assertEqual(self.writer.requests, [encode({"type": "say", "text": draft})])
+
+    async def test_streaming_does_not_rewrap_unchanged_history_or_block_input(self):
+        self.ui.model.handle(message(1, "Research findings. " * 40 + "\n" + "History\n" * 2000))
+        self.ui.model.handle(turn())
+        self.ui.application.invalidate()
+        await eventually(lambda: "live · not published" in screen_text(self.ui))
+        with patch("agent_team.tui.fragment_list_to_text", wraps=fragment_list_to_text) as wrap:
+            for index in range(3):
+                self.reader.feed_data(
+                    encode(
+                        {
+                            "type": "delta",
+                            "turn_id": "a",
+                            "speaker": "member_a",
+                            "text": f"Thought {index}\n",
+                        }
+                    )
+                )
+                await eventually(lambda index=index: f"Thought {index}" in screen_text(self.ui))
+                self.pipe.send_text(str(index))
+                await eventually(lambda index=index: self.ui.input.text.endswith(str(index)))
+            self.assertLess(wrap.call_count, 30)
+        self.pipe.send_text("\r")
+        await eventually(lambda: bool(self.writer.requests))
+        self.assertEqual(self.writer.requests, [encode({"type": "say", "text": "012"})])
+
+    async def test_incremental_wrapping_matches_full_rebuild_after_content_changes(self):
+        window = self.ui.body.window
+        wide = "\u754c\U0001f600e\u0301\t" * 30
+        for event in (
+            message(2, "Earlier findings\n" + wide),
+            turn(),
+            turn("b", "member_b"),
+            {"type": "delta", "turn_id": "b", "speaker": "member_b", "text": wide},
+            {"type": "delta", "turn_id": "a", "speaker": "member_a", "text": wide + "\nMore"},
+            message(3, "Published reply", turn_id="a"),
+            message(1, "History loaded out of order\n" + wide),
+            {"type": "turn.finished", "turn_id": "b", "speaker": "member_b"},
+        ):
+            self.ui.model.handle(event)
+            self.ui.application._redraw()
+            rows = window.rows[:]
+            window.cache_key = None
+            self.ui.application._redraw()
+            self.assertEqual(window.rows, rows)
+        self.ui.show("help")
+        self.ui.application._redraw()
+        self.output.columns = 51
+        self.ui.application._redraw()
+        rows = window.rows[:]
+        window.cache_key = None
+        self.ui.application._redraw()
+        self.assertEqual(window.rows, rows)
 
     async def test_wheel_scrolls_wrapped_display_rows_and_preserves_the_composer(self):
         self.ui.model.handle(message(1, " ".join(f"word{i:04}" for i in range(2000))))
