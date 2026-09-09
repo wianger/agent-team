@@ -503,7 +503,11 @@ class ChatRoom(Room):
                     text="No observable output; still waiting. Use /interrupt to cancel.",
                 )
 
-        async with observe_activity(self.config.idle_warning_seconds, warn) as activity:
+        async with observe_activity(
+            self.config.idle_warning_seconds,
+            warn,
+            on_activity=lambda: self.report_activity(name, turn.turn_id, turn.fence[0]),
+        ) as activity:
             if name == "system":
                 results = await self.verify(turn.turn_id, activity)
                 if turn.fence[0] != self.revision:

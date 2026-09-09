@@ -224,6 +224,105 @@ class PresentationTests(unittest.TestCase):
             quota["retrying"] = True
             self.assertIn("Recovery check pending or in progress", self.view.page("status").text)
 
+    def test_successful_recovery_clears_only_the_resolved_quota_banner(self):
+        self.view.handle(welcome(paused=True, reason="quota"))
+        quota = {"backend": "claude", "retry_at": None, "error": "Usage exhausted"}
+        self.view.handle({"type": "agent.quota", "speaker": "member_a", "quota": quota})
+        self.view.handle(
+            {"type": "error", "speaker": "member_a", "text": "Usage exhausted", "quota": True}
+        )
+        self.view.handle(turn(phase="recovery", lane="recovery"))
+        self.assertIn("Usage exhausted", self.view.notice)  # Starting a probe is not recovery.
+        self.view.handle({"type": "agent.quota", "speaker": "member_b", "quota": None})
+        self.assertTrue(self.view.notice)
+        self.view.handle({"type": "agent.quota", "speaker": "member_a", "quota": None})
+        self.assertEqual(self.view.notice, "")
+        self.assertEqual(self.view.state["quotas"], {})
+        self.assertIn("Usage exhausted", self.view.page("activity").text)
+        self.assertTrue(self.view.state["paused"])  # Only coordinator state can resume the UI.
+
+    def test_recovery_does_not_clear_another_members_quota_or_a_new_unrelated_error(self):
+        for unrelated in (False, True):
+            with self.subTest(unrelated=unrelated):
+                self.view.handle(
+                    {"type": "error", "speaker": "member_a", "text": "Limited", "quota": True}
+                )
+                self.view.handle(
+                    {
+                        "type": "error",
+                        "speaker": "member_b",
+                        "text": "Still blocked",
+                        "quota": not unrelated,
+                    }
+                )
+                self.view.handle({"type": "agent.quota", "speaker": "member_a", "quota": None})
+                self.assertEqual(self.view.notice, "member_b: Still blocked")
+
+    def test_authoritative_state_clears_a_resolved_quota_notice_without_unpausing(self):
+        self.view.handle({"type": "error", "speaker": "member_a", "text": "Limited", "quota": True})
+        self.view.handle({"type": "state", "paused": True, "reason": "user"})
+        self.assertTrue(self.view.notice)  # Old servers without quota state are not proof.
+        self.view.handle(
+            {
+                "type": "state",
+                "quotas": {},
+                "paused": True,
+                "reason": "error",
+                "runtimes": {"member_a": {"error": "Recovery failed"}},
+            }
+        )
+        self.assertTrue(self.view.notice)
+        self.view.handle({"type": "state", "quotas": {}, "paused": True, "reason": "user"})
+        self.assertEqual(self.view.notice, "")
+        self.assertTrue(self.view.state["paused"])
+        self.assertEqual(self.view.state["reason"], "user")
+
+    def test_recovery_preserves_a_locally_replaced_notice(self):
+        self.view.handle({"type": "error", "speaker": "member_a", "text": "Limited", "quota": True})
+        self.view.notice = "Unknown command"
+        self.view.handle({"type": "agent.quota", "speaker": "member_a", "quota": None})
+        self.assertEqual(self.view.notice, "Unknown command")
+
+    def test_private_activity_clears_idle_and_shows_elapsed_time_without_a_public_message(self):
+        with patch("agent_team.tui.time.monotonic", return_value=10) as clock:
+            self.view.handle(turn(phase="implementation"))
+            self.assertIn("No backend activity observed yet", self.view.page("conversation").text)
+            self.view.handle(
+                {"type": "turn.idle", "turn_id": "a", "speaker": "member_a", "text": "No output"}
+            )
+            self.assertIn("silence does not prove a stall", self.view.page("status").text)
+            clock.return_value = 75
+            self.view.handle({"type": "turn.activity", "turn_id": "a", "speaker": "member_a"})
+            clock.return_value = 78
+            for view in ("conversation", "status"):
+                text = self.view.page(view).text
+                self.assertIn("Running for 1m 08s", text)
+                self.assertIn("Backend activity 3s ago", text)
+                self.assertNotIn("silence does not prove a stall", text)
+            self.assertEqual(dict(self.view.member_statuses())["member_a"], "Writing")
+            self.assertEqual(self.view.messages, {})
+            self.assertEqual(self.view.new_messages, 0)
+            self.assertEqual(self.view.replies.turns["a"][1], "")
+            self.assertNotIn("Backend activity", self.view.page("activity").text)
+
+    def test_activity_timing_is_per_turn_and_late_events_do_not_revive_finished_turns(self):
+        with patch("agent_team.tui.time.monotonic", return_value=10) as clock:
+            self.view.handle(turn())
+            clock.return_value = 20
+            self.view.handle(turn("b", "member_b", joined_mid_turn=True))
+            self.view.handle({"type": "delta", "turn_id": "a", "speaker": "member_a", "text": "Hi"})
+            clock.return_value = 25
+            self.assertIn(
+                "Running for 0m 15s · Backend activity 5s ago", self.view.turn_progress("a")
+            )
+            self.assertIn("Observed for 0m 05s · No backend activity", self.view.turn_progress("b"))
+            self.view.handle({"type": "turn.finished", "turn_id": "a", "speaker": "member_a"})
+            self.view.handle({"type": "turn.activity", "turn_id": "a", "speaker": "member_a"})
+            self.assertNotIn("a", self.view.started)
+            self.assertNotIn("a", self.view.last_activity)
+            self.assertNotIn("a", self.view.turns)
+            self.assertNotIn("a", self.view.replies.turns)
+
     def test_recovery_checks_never_show_empty_public_drafts(self):
         self.view.handle(welcome(paused=True, reason="quota"))
         self.view.handle(turn(phase="recovery", lane="recovery"))
@@ -700,6 +799,51 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
             self.ui.paint()
             self.assertEqual(self.ui.body.text, snapshot)
 
+    async def test_activity_clock_refreshes_without_model_calls_or_losing_input_and_scroll(self):
+        with patch("agent_team.tui.time") as clock:
+            clock.time.return_value = 2_000_000_000
+            clock.monotonic.return_value = 10
+            self.ui.model.handle(turn(phase="implementation"))
+            self.ui.paint()
+            self.pipe.send_text("Keep typing")
+            await eventually(lambda: self.ui.input.text == "Keep typing")
+            self.reader.feed_data(
+                encode({"type": "turn.activity", "turn_id": "a", "speaker": "member_a"})
+            )
+            await eventually(lambda: "Backend activity 0s ago" in self.ui.body.text)
+            clock.time.return_value += 5
+            clock.monotonic.return_value += 5
+            await eventually(lambda: "Backend activity 5s ago" in self.ui.body.text)
+            self.assertIn("Running for 0m 05s", self.ui.body.text)
+            self.assertEqual(self.ui.input.text, "Keep typing")
+            self.assertTrue(self.ui.application.layout.has_focus(self.ui.input))
+            self.assertFalse(self.writer.requests)
+            self.ui.freeze()
+            snapshot = self.ui.body.text
+            clock.time.return_value += 5
+            clock.monotonic.return_value += 5
+            self.ui.paint()
+            self.assertEqual(self.ui.body.text, snapshot)
+
+    async def test_automatic_recovery_removes_the_banner_without_sending_resume(self):
+        self.pipe.send_text("Unsent guidance")
+        await eventually(lambda: self.ui.input.text == "Unsent guidance")
+        self.reader.feed_data(
+            encode(
+                {"type": "error", "speaker": "member_a", "text": "Usage exhausted", "quota": True}
+            )
+        )
+        await eventually(lambda: "Usage exhausted" in self.ui.model.notice)
+        self.reader.feed_data(encode({"type": "agent.quota", "speaker": "member_a", "quota": None}))
+        self.reader.feed_data(
+            encode({"type": "state", **welcome(paused=False, reason="running", quotas={})["state"]})
+        )
+        await eventually(lambda: not self.ui.model.notice and not self.ui.model.state["paused"])
+        self.assertNotIn("Usage exhausted", str(self.ui.guidance()))
+        self.assertIn("Usage exhausted", self.ui.model.page("activity").text)
+        self.assertEqual(self.ui.input.text, "Unsent guidance")
+        self.assertFalse(self.writer.requests)
+
     async def test_reading_with_mouse_freezes_the_snapshot(self):
         self.ui.model.handle(message(1, "\n".join(f"Line {i}" for i in range(80))))
         self.ui.application.invalidate()
@@ -746,6 +890,28 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
         self.pipe.send_text("\r")
         await eventually(lambda: bool(self.writer.requests))
         self.assertEqual(self.writer.requests, [encode({"type": "say", "text": draft})])
+
+    async def test_activity_clock_does_not_rewrap_long_concurrent_drafts(self):
+        with patch("agent_team.tui.time") as clock:
+            clock.time.return_value = 2_000_000_000
+            clock.monotonic.return_value = 10
+            for identifier, speaker in (("a", "member_a"), ("b", "member_b")):
+                self.ui.model.handle(turn(identifier, speaker))
+                self.ui.model.handle(
+                    {
+                        "type": "delta",
+                        "turn_id": identifier,
+                        "speaker": speaker,
+                        "text": "Long unchanged draft\n" * 2000,
+                    }
+                )
+            self.ui.application._redraw()
+            with patch("agent_team.tui.fragment_list_to_text", wraps=fragment_list_to_text) as wrap:
+                clock.time.return_value += 1
+                clock.monotonic.return_value += 1
+                self.ui.application._redraw()
+                self.assertIn("Backend activity 1s ago", self.ui.body.text)
+                self.assertLess(wrap.call_count, 20)
 
     async def test_streaming_does_not_rewrap_unchanged_history_or_block_input(self):
         self.ui.model.handle(message(1, "Research findings. " * 40 + "\n" + "History\n" * 2000))

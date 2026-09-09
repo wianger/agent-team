@@ -82,6 +82,35 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
                     self.room.runner.result()
                 await asyncio.sleep(0.005)
 
+    async def test_private_activity_reports_are_isolated_from_public_context_and_peer_wakeups(self):
+        class ActiveAdapter:
+            supports_activity = True
+            activity = None
+
+            async def stream(self, prompt, *, phase="discussion", on_activity=None):
+                self.activity = on_activity
+                await asyncio.Event().wait()
+                yield PASS
+
+        a, b = ActiveAdapter(), ActiveAdapter()
+        room = self.start({"a": a, "b": b})
+        await self.until(lambda: a.activity and b.activity)
+        a.activity()
+        b.activity()
+        reports = [e for e in self.events if e["type"] == "turn.activity"]
+        self.assertEqual(
+            {(e["speaker"], e["turn_id"]) for e in reports},
+            {(name, room.members[name].active.turn_id) for name in ("a", "b")},
+        )
+        self.assertEqual(len(room.messages), 1)
+        self.assertEqual(sum(e["type"] == "turn.started" for e in self.events), 2)
+        self.assertNotIn("turn.activity", [e["type"] for e in self.store.events()])
+        room.control("interrupt")
+        await self.until(lambda: room.active is None)
+        a.activity()
+        b.activity()
+        self.assertEqual(sum(e["type"] == "turn.activity" for e in self.events), 2)
+
     async def test_concurrent_thought_and_nonblocking_human_chat_preserve_all_context(self):
         a_gate, b_gate = asyncio.Event(), asyncio.Event()
         a, b = Scripted((a_gate, "A contribution")), Scripted((b_gate, "B contribution"))

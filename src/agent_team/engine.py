@@ -436,12 +436,20 @@ class Room:
                     "Use /interrupt to cancel.",
                 )
 
-        async with observe_activity(self.config.idle_warning_seconds, warn) as activity:
+        async with observe_activity(
+            self.config.idle_warning_seconds,
+            warn,
+            on_activity=lambda: self.report_activity(name, turn_id, revision),
+        ) as activity:
             if phase == "verification":
                 return await self.verify(turn_id, activity)
             return await self.collect(
                 name, prompt, turn_id, revision, phase, session_plan, activity
             )
+
+    def report_activity(self, name: str, turn_id: str, revision: int) -> None:
+        if not self.closed and revision == self.revision:
+            self.emit("turn.activity", durable=False, speaker=name, turn_id=turn_id)
 
     async def collect(
         self,

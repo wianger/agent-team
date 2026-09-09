@@ -24,6 +24,37 @@ async def eventually(predicate):
 
 
 class ObserverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_activity_reports_are_throttled_without_a_timer_or_warning(self):
+        reports = []
+        loop = asyncio.get_running_loop()
+        async with observe_activity(
+            0, self.fail, on_activity=lambda: reports.append(True)
+        ) as touch:
+            self.assertEqual(reports, [])
+            with patch.object(loop, "time", return_value=10) as clock:
+                for _ in range(100):
+                    touch()
+                self.assertEqual(len(reports), 1)
+                clock.return_value = 10.9
+                touch()
+                self.assertEqual(len(reports), 1)
+                clock.return_value = 11
+                touch()
+                self.assertEqual(len(reports), 2)
+        touch()  # A late callback cannot revive a completed turn.
+        self.assertEqual(len(reports), 2)
+
+    async def test_activity_after_idle_reports_immediately_even_inside_throttle_window(self):
+        notices, reports = [], []
+        async with observe_activity(
+            0.03, notices.append, on_activity=lambda: reports.append(True)
+        ) as touch:
+            touch()
+            await eventually(lambda: len(notices) == 1)
+            self.assertEqual(len(reports), 1)
+            touch()
+            self.assertEqual(len(reports), 2)
+
     async def test_one_notice_per_silence_activity_rearms_and_exit_cleans_up(self):
         notices = []
         async with observe_activity(0.03, notices.append) as touch:
@@ -203,6 +234,23 @@ class RoomActivityTests(unittest.IsolatedAsyncioTestCase):
         await eventually(lambda: len(self.warnings()) == 2)
         self.assertEqual(len(self.room.messages), 1)
         self.assertFalse(self.adapter.cancelled)
+
+    async def test_non_reply_activity_is_ephemeral_and_does_not_advance_the_room(self):
+        await self.start_turn()
+        head = self.room.messages[-1]["id"]
+        self.adapter.activity()
+        reports = [e for e in self.events if e["type"] == "turn.activity"]
+        self.assertEqual(
+            reports,
+            [{"type": "turn.activity", "speaker": "a", "turn_id": self.room.active["turn_id"]}],
+        )
+        self.assertEqual(self.room.messages[-1]["id"], head)
+        self.assertNotIn("turn.activity", [e["type"] for e in self.store.events()])
+        self.assertFalse(self.room.manual_paused)
+        await eventually(lambda: bool(self.warnings()))
+        self.room.control("interrupt")
+        self.adapter.activity()  # Revoked turns must not appear active during cleanup.
+        self.assertEqual(sum(e["type"] == "turn.activity" for e in self.events), 1)
 
     async def test_every_agent_phase_uses_no_default_hard_deadline(self):
         class FastAdapter:

@@ -138,12 +138,15 @@ class RoomView:
         self.messages: dict[int, dict] = {}
         self.replies = LiveReplies()
         self.turns: dict[str, dict] = {}
+        self.started: dict[str, float] = {}
+        self.last_activity: dict[str, float] = {}
         self.activity: list[tuple[str, str]] = []
         self.idle: set[str] = set()
         self.online: list[str] = []
         self.revision = 0
         self.new_messages = 0
         self.notice = ""
+        self.quota_notice: tuple[str, str] | None = None
 
     def record(self, title, text):
         self.activity.append((clean(title), clean(text)))
@@ -163,6 +166,12 @@ class RoomView:
             self.record("Connected", "Public history is loading. " + self.permissions())
         elif kind == "state":
             self.state = event
+            if self.quota_notice and "quotas" in event:
+                name, _ = self.quota_notice
+                if name not in event["quotas"] and not event.get("runtimes", {}).get(name, {}).get(
+                    "error"
+                ):
+                    self.clear_quota_notice(name)
         elif kind == "message":
             if event["id"] not in self.messages:
                 self.messages[event["id"]] = event
@@ -172,10 +181,15 @@ class RoomView:
                 self.record("Decision not applied", event["rejection"])
         elif kind in {"turn.started", "floor.granted"}:
             self.turns[identifier] = event
-        elif kind == "delta":
-            self.idle.discard(identifier)
+            self.started[identifier] = time.monotonic()
+        elif kind in {"delta", "turn.activity"}:
+            if identifier in self.turns:
+                self.last_activity[identifier] = time.monotonic()
+                self.idle.discard(identifier)
         elif kind in {"turn.finished", "floor.released"}:
             self.turns.pop(identifier, None)
+            self.started.pop(identifier, None)
+            self.last_activity.pop(identifier, None)
             self.idle.discard(identifier)
             outcome = event.get("outcome", "finished")
             self.record(
@@ -199,7 +213,17 @@ class RoomView:
             self.state = {**self.state, **event}
         elif kind == "error":
             self.notice = f"{event.get('speaker', 'Team')}: {event['text']}"
+            self.quota_notice = (event["speaker"], self.notice) if event.get("quota") else None
             self.record("Error", self.notice)
+        elif kind == "agent.quota":
+            name = event["speaker"]
+            quotas = dict(self.state.get("quotas", {}))
+            if event["quota"] is None:
+                quotas.pop(name, None)
+                self.clear_quota_notice(name)
+            else:
+                quotas[name] = event["quota"]
+            self.state = {**self.state, "quotas": quotas}
         elif kind == "turn.idle":
             self.idle.add(identifier)
             self.record(event["speaker"], event["text"])
@@ -215,6 +239,27 @@ class RoomView:
         elif kind == "consensus.saved":
             self.record("Consensus document", f"v{event['version']}: {event['document']}")
         self.revision += 1
+
+    def clear_quota_notice(self, name):
+        if self.quota_notice and self.quota_notice[0] == name:
+            if self.notice == self.quota_notice[1]:
+                self.notice = ""
+            self.quota_notice = None
+
+    def turn_progress(self, identifier):
+        now = time.monotonic()
+        seconds = max(0, int(now - self.started[identifier]))
+        minutes, seconds = divmod(seconds, 60)
+        label = "Observed for" if self.turns[identifier].get("joined_mid_turn") else "Running for"
+        progress = f"{label} {minutes}m {seconds:02}s"
+        if identifier in self.last_activity:
+            age = max(0, int(now - self.last_activity[identifier]))
+            progress += f" · Backend activity {age}s ago"
+        else:
+            progress += " · No backend activity observed yet"
+        if identifier in self.idle:
+            progress += " · Still waiting; silence does not prove a stall"
+        return progress
 
     def permissions(self):
         if self.state.get("permission_mode") == "full_auto":
@@ -421,6 +466,11 @@ class RoomView:
                     self.speaker_style(name),
                     compact=True,
                 )
+            # Keep ticking counters after all drafts so long, unchanged replies
+            # retain their cached display rows instead of rewrapping every second.
+            for identifier, turn in self.turns.items():
+                if turn.get("phase") != "recovery":
+                    page.add(f"{turn['speaker']} · {self.turn_progress(identifier)}", "class:muted")
         elif view == "plan":
             page.block("Plan & shared work", describe_workflow(self.state.get("workflow")))
         elif view == "consensus":
@@ -464,6 +514,9 @@ class RoomView:
             page.block("Team status", self.phase() + "\n\n" + self.guidance())
             for name, status in self.member_statuses():
                 page.block(name, status, self.speaker_style(name))
+                for identifier, turn in self.turns.items():
+                    if turn["speaker"] == name or name == "Checks" and turn["speaker"] == "system":
+                        page.add(self.turn_progress(identifier), "class:muted")
                 error = self.state.get("runtimes", {}).get(name, {}).get("error")
                 if error:
                     page.block("Needs attention", error, "class:warning")
@@ -986,7 +1039,12 @@ class TeamUI:
 
     def paint(self):
         key = (self.view, self.model.revision)
-        if self.view == "status" and self.model.state.get("quotas"):
+        if (
+            self.view == "status"
+            and self.model.state.get("quotas")
+            or self.view in {"conversation", "status"}
+            and self.model.turns
+        ):
             key += (int(time.time()),)
         if key == self.painted or (not self.follow and self.painted is not None):
             return
