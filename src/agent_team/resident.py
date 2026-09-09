@@ -12,6 +12,8 @@ from pathlib import Path
 from .adapters import (
     AdapterError,
     EventDecoder,
+    QuotaExceeded,
+    codex_quota_reset,
     command_for,
     drain_and_terminate,
     make_adapter,
@@ -294,6 +296,18 @@ class CodexResident(JsonProcess):
                         raise AdapterError("Codex returned an empty reply")
                     self.result_session_id = self.connection_session
                     return
+        except QuotaExceeded as exc:
+            try:
+                # A best-effort metadata read, not a model call or quota polling loop.
+                try:
+                    async with asyncio.timeout(5):
+                        limits = await self.request("account/rateLimits/read", {})
+                    exc.resets_at, exc.limit_type = codex_quota_reset(limits)
+                except (AdapterError, TimeoutError):
+                    pass
+                raise
+            finally:
+                await self.close()
         except BaseException:
             await self.close()
             raise
@@ -419,7 +433,13 @@ class ClaudeResident(JsonProcess):
                 }
             )
             while True:
-                event = await self.next_event()
+                try:
+                    event = await self.next_event()
+                except QuotaExceeded as exc:
+                    # EOF/stderr failures also retain metadata already consumed this turn.
+                    raise provider_error(
+                        "claude", str(exc), quota_info=decoder.quota_info, rate_limited=True
+                    ) from exc
                 delta = decoder.feed(event)
                 if delta:
                     yield delta

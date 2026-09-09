@@ -25,6 +25,19 @@ for raw in sys.stdin:
         method, params = event.get("method"), event.get("params", {})
         if method == "initialize":
             send({"id": event["id"], "result": {}})
+        elif method == "account/rateLimits/read":
+            send(
+                {
+                    "id": event["id"],
+                    "result": {
+                        "rateLimits": {
+                            "limitId": "codex",
+                            "primary": {"usedPercent": 100, "resetsAt": 2_000_000_600},
+                            "secondary": None,
+                        }
+                    },
+                }
+            )
         elif method in {"thread/start", "thread/resume"}:
             session = params.get("threadId") or str(uuid.uuid4())
             send({"id": event["id"], "result": {"thread": {"id": session}}})
@@ -119,13 +132,20 @@ for raw in sys.stdin:
                     else permission,
                 }
             )
-        if prompt == "quota":
+        if prompt in {"quota", "quota-exit"}:
             send(
                 {
                     "type": "rate_limit_event",
-                    "rate_limit_info": {"status": "rejected", "rateLimitType": "five_hour"},
+                    "rate_limit_info": {
+                        "status": "rejected",
+                        "rateLimitType": "five_hour",
+                        "resetsAt": 2_000_000_600,
+                    },
                 }
             )
+            if prompt == "quota-exit":
+                print("Quota exhausted", file=sys.stderr, flush=True)
+                sys.exit(2)
             send(
                 {
                     "type": "assistant",

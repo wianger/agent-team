@@ -206,12 +206,64 @@ class ResidentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(adapter.process)
 
     async def test_native_quota_errors_keep_their_type_and_invalidate_the_invocation(self):
-        for backend in ("claude", "codex"):
+        for backend, prompt in (("claude", "quota"), ("claude", "quota-exit"), ("codex", "quota")):
             adapter = self.make(backend)
-            with self.subTest(backend=backend), self.assertRaises(QuotaExceeded):
-                await self.ask(adapter, "quota")
+            with (
+                self.subTest(backend=backend, prompt=prompt),
+                self.assertRaises(QuotaExceeded) as raised,
+            ):
+                await self.ask(adapter, prompt)
+            self.assertEqual(raised.exception.resets_at, 2_000_000_600)
+            self.assertEqual(
+                raised.exception.limit_type, "five_hour" if backend == "claude" else "primary"
+            )
             self.assertIsNone(adapter.result_session_id)
             self.assertIsNone(adapter.process)
+
+    async def test_codex_reset_read_is_best_effort_and_only_runs_after_a_quota_error(self):
+        for failure in (AdapterError("Unsupported method"), TimeoutError()):
+            adapter = self.make("codex")
+            request = adapter.request
+
+            async def unavailable(method, params, error=failure, call=request):
+                if method == "account/rateLimits/read":
+                    raise error
+                return await call(method, params)
+
+            adapter.request = unavailable
+            with self.assertRaises(QuotaExceeded) as raised:
+                await self.ask(adapter, "quota")
+            self.assertIsNone(raised.exception.resets_at)
+            self.assertIsNone(adapter.process)
+        adapter = self.make("codex")
+        await self.ask(adapter)
+        self.assertNotIn("account/rateLimits/read", [method for method, _ in adapter.requests])
+
+    async def test_cancellation_during_codex_reset_read_closes_the_process(self):
+        adapter = self.make("codex")
+        request = adapter.request
+        reading = asyncio.Event()
+
+        async def pending(method, params):
+            if method == "account/rateLimits/read":
+                reading.set()
+                await asyncio.Event().wait()
+            return await request(method, params)
+
+        adapter.request = pending
+        task = asyncio.create_task(self.ask(adapter, "quota"))
+        try:
+            async with asyncio.timeout(2):
+                await reading.wait()
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            self.assertIsNone(adapter.process)
+            self.assertIsNone(adapter.result_session_id)
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
     async def test_transport_failures_unblock_pending_rpc_and_never_commit_partial_output(self):
         for backend in ("codex", "claude"):

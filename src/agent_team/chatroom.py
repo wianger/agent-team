@@ -9,9 +9,9 @@ from contextlib import aclosing
 from dataclasses import dataclass, field
 
 from .activity import observe_activity
-from .adapters import AdapterError
+from .adapters import AdapterError, QuotaExceeded
 from .context import PASS, build_prompt
-from .engine import Room
+from .engine import QUOTA_PROBE_PROMPT, Room
 from .resident import make_resident
 from .workflow import Workflow, parse_action
 
@@ -114,11 +114,7 @@ class ChatRoom(Room):
         self.active = next((m.active.public() for m in self.members.values() if m.active), None)
 
     def failed_members(self):
-        return [
-            name
-            for name, member in self.members.items()
-            if member.error is not None or name in self.fatal_quotas()
-        ]
+        return [name for name, member in self.members.items() if member.error is not None]
 
     def on_quota_retry(self, name):
         super().on_quota_retry(name)
@@ -151,7 +147,7 @@ class ChatRoom(Room):
             )
         )
         if not self.manual_paused:
-            self.reason = "running"
+            self.reason = "quota" if self.quotas else "running"
         self.state()
         self.wake.set()
 
@@ -177,7 +173,13 @@ class ChatRoom(Room):
             )
         )
         self.reason = (
-            "error" if self.failed_members() else "user" if self.manual_paused else "running"
+            "error"
+            if self.failed_members()
+            else "user"
+            if self.manual_paused
+            else "quota"
+            if self.quotas
+            else "running"
         )
         self.state()
         self.wake.set()
@@ -202,8 +204,10 @@ class ChatRoom(Room):
                 raise ValueError("Send an idea first")
             if self.workflow and self.workflow.phase == "completed":
                 raise ValueError("Idea completed; send new guidance")
-            if self.failed_members() and self.active:
+            if (self.failed_members() or self.quotas) and self.active:
                 raise ValueError("Wait for all interrupted turns to stop before retrying the team")
+            if self.quotas and action == "next":
+                raise ValueError("Usage limits pause the entire team; use /retry or /resume first")
             if action == "next" and target and any(n != target for n in self.failed_members()):
                 raise ValueError("Other members are unavailable; use /retry or /resume first")
             if action == "next" and self.active:
@@ -216,7 +220,7 @@ class ChatRoom(Room):
             for name in [target] if target else names + ["system"]:
                 self.members[name].error = None
                 self.members[name].seen = None
-            self.control_quotas(action, target)
+            self.retry_quotas(target)
             self.manual_paused, self.reason = False, "running"
             self.single_step = action == "next"
             self.next_target = target if self.single_step else None
@@ -225,6 +229,8 @@ class ChatRoom(Room):
         if self.failed_members():
             self.manual_paused, self.reason = True, "error"
             self.single_step, self.next_target = False, None
+        elif self.quotas and not self.manual_paused:
+            self.reason = "quota"
         self.emit("room.control", action=action, target=target)
         self.state()
         self.wake.set()
@@ -236,6 +242,7 @@ class ChatRoom(Room):
             member.active
             or member.error
             or self.quota_blocked(name)
+            or (self.quotas and lane != "recovery")
             or (not force and member.seen == (head, fence, lane))
         ):
             return False
@@ -257,6 +264,17 @@ class ChatRoom(Room):
         if self.failed_members():
             self.manual_paused, self.reason = True, "error"
             return  # Do not finalize agreement or schedule work until an explicit retry.
+        if self.quotas:
+            if not self.manual_paused:
+                self.reason = "quota"
+                self.retry_due_quotas()
+                # Drain every revoked reader/writer/check before probing, then keep
+                # normal discussion fenced until all unavailable members recover.
+                if not self.active:
+                    name = next((n for n in self.adapters if n in self.quota_retries), None)
+                    if name:
+                        self.launch(name, "recovery", "recovery", force=True)
+            return
         if self.manual_paused and self.document_error:
             return  # A failed document export is retried only after an explicit resume.
         phase = self.workflow.phase if self.workflow else "discussion"
@@ -290,7 +308,6 @@ class ChatRoom(Room):
             return
         if self.manual_paused:
             return
-        self.retry_due_quotas()
         # A redirected or revised write/check turn retains its lease until cancellation
         # actually finishes. New formal readers must not inspect a changing workspace.
         if self.writer is not None:
@@ -303,7 +320,7 @@ class ChatRoom(Room):
         if self.single_step:
             if work:
                 return
-            name = self.choose_available(self.next_target)
+            name = self.choose(self.next_target)
             if name:
                 self.launch(name, phase, "work", force=True)
             return
@@ -312,7 +329,7 @@ class ChatRoom(Room):
                 if phase == "verification":
                     self.launch("system", phase, "work")
                 else:
-                    name = self.choose_available()
+                    name = self.choose()
                     if name:
                         self.launch(name, phase, "work")
             primary = {self.writer} if self.writer else set()
@@ -376,11 +393,12 @@ class ChatRoom(Room):
             except asyncio.CancelledError:
                 pass
             except Exception as exc:
-                if turn.fence[0] == self.revision:
+                if not self.closed and (
+                    turn.fence[0] == self.revision or isinstance(exc, QuotaExceeded)
+                ):
                     outcome = "failed"
                     if self.record_quota(name, exc, turn.turn_id):
-                        if name in self.fatal_quotas():
-                            self.cancel_active(exclude=turn.turn_id)
+                        self.cancel_active(exclude=turn.turn_id)
                     else:
                         self.clear_quota(name)
                         member.error = (
@@ -400,7 +418,12 @@ class ChatRoom(Room):
                             "/retry or /resume to continue."
                         )
             finally:
-                if name != "system" and outcome not in {"completed", "passed", "rejected"}:
+                if name != "system" and outcome not in {
+                    "completed",
+                    "passed",
+                    "rejected",
+                    "recovered",
+                }:
                     self.quota_retries.discard(name)
                     self.sessions.invalidate(name, "Concurrent invocation did not commit")
                 if self.writer == name:
@@ -419,6 +442,14 @@ class ChatRoom(Room):
 
     async def invoke(self, turn):
         name = turn.speaker
+        if turn.lane == "recovery":
+            self.sessions.invalidate(name, "Isolated quota recovery check")
+            await self.execute_turn(
+                name, QUOTA_PROBE_PROMPT, turn.turn_id, turn.fence[0], "recovery", None
+            )
+            if turn.fence[0] != self.revision:
+                raise asyncio.CancelledError
+            return "recovered"
         phase = (
             "chat"
             if turn.lane == "chat"

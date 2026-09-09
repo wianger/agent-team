@@ -29,9 +29,10 @@ HELP = """Type a message to participate.
 /help           Show help
 /quit           Leave this terminal (Ctrl-D)
 Chatroom messages join the conversation without interruption; /redirect changes direction.
-Claude usage exhaustion cools down that member for 5 hours while peers may continue.
-Codex usage exhaustion and other failed calls pause the whole team until explicit recovery.
-Automatic Claude retries never resume a paused team or waive required votes.
+Any native usage limit pauses the whole team. /status shows reset and recovery-check timing.
+Known provider reset times trigger a check after 30s; unknown resets require manual recovery.
+Discussion resumes only after all limited members pass checks; required votes are never waived.
+Automatic checks never override manual pauses, other errors, or a server restart.
 Resolve the issue and wait for active turns to stop, then /retry [agent] or /resume.
 Legacy serial mode still interrupts on ordinary human messages. Use /resume after a manual pause.
 """

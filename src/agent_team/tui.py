@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from datetime import datetime
+from math import ceil
 from pathlib import Path
 
 from prompt_toolkit.application import Application
@@ -235,6 +237,10 @@ class RoomView:
                 if self.turns
                 else "Paused · a team call failed"
             )
+        if reason == "quota":
+            if any(t.get("phase") == "recovery" for t in self.turns.values()):
+                return "Paused · checking quota recovery"
+            return "Pausing · stopping active turns" if self.turns else "Paused · usage limit"
         if self.state.get("paused") and reason != "waiting":
             return "Pausing · active turns are finishing" if self.turns else "Paused · " + label
         if not self.messages and not self.state.get("messages"):
@@ -268,18 +274,18 @@ class RoomView:
                 else "/resume"
             )
             return f"Team paused. Check Activity, resolve the error, then {retry}."
+        if reason == "quota":
+            return (
+                "Team paused by a usage limit. Known reset times trigger recovery checks; "
+                "unknown times require /retry or /resume. /status shows timing. "
+                "Discussion resumes only after all limited members recover."
+            )
         if self.state.get("paused") and reason != "waiting":
             if self.turns:
                 return "Waiting for active turns to finish. /interrupt cancels them immediately."
             return "Messages do not resume a paused team. Use /resume when you are ready."
         if not self.messages and not self.state.get("messages"):
             return "Send your idea to start discussion automatically. Work follows agreement."
-        if self.state.get("quotas"):
-            return (
-                "Claude quota cooldown: other members may continue. Retry is automatic after "
-                "5 hours while the team is running; /retry [agent] tries earlier. "
-                "Votes are retained."
-            )
         if self.state.get("interaction_mode") == "serial":
             return "Serial mode: a message interrupts work. /pause lets the current turn finish."
         return "Messages add context. /redirect <guidance> stops work to change direction."
@@ -293,11 +299,11 @@ class RoomView:
             turn = next((t for t in self.turns.values() if t["speaker"] == name), None)
             if quota:
                 status = (
-                    "Retrying quota"
+                    "Checking quota"
                     if quota.get("retrying")
-                    else "Quota · manual resume"
+                    else "Quota · reset unknown"
                     if quota["retry_at"] is None
-                    else "Quota · cooldown"
+                    else "Quota · waiting for reset"
                 )
             elif runtime.get("error"):
                 status = "Unavailable"
@@ -324,6 +330,38 @@ class RoomView:
         if self.state.get("writer") == "system":
             statuses.append(("Checks", "Running"))
         return statuses
+
+    def quota_details(self, quota):
+        lines = [quota["error"]]
+        if quota.get("limit_type"):
+            lines.append("Limit window: " + quota["limit_type"])
+        when = quota["retry_at"]
+        if when is None:
+            lines.append("Timing source: unknown; no reset time is assumed.")
+            lines.append("No automatic retry. Use /resume or /retry after resolving the limit.")
+        else:
+            reset = quota.get("resets_at")
+            if quota.get("retry_source") == "provider" and reset is not None:
+                lines.append("Timing source: provider reset time + 30s safety buffer.")
+                lines.append(
+                    "Provider reset: " + datetime.fromtimestamp(reset).astimezone().isoformat()
+                )
+            lines.append(
+                "Retry due: "
+                + datetime.fromtimestamp(when).astimezone().isoformat()
+                + " (deferred while manually paused)."
+            )
+            remaining = max(0, ceil(when - time.time()))
+            hours, seconds = divmod(remaining, 3600)
+            minutes, seconds = divmod(seconds, 60)
+            lines.append(
+                f"Remaining wait: {hours}h {minutes:02}m {seconds:02}s"
+                if remaining
+                else "Retry is due; waiting for cleanup or explicit resume if manually paused."
+            )
+        if quota.get("retrying"):
+            lines.append("Recovery check pending or in progress; discussion remains paused.")
+        return "\n".join(lines)
 
     def page(self, view, *, room_label="Shared workspace"):
         page = PageBuilder()
@@ -361,6 +399,8 @@ class RoomView:
             for identifier, (name, text) in self.replies.turns.items():
                 turn = self.turns.get(identifier, {})
                 phase = turn.get("phase", "discussion")
+                if phase == "recovery":
+                    continue  # Availability probes do not publish conversation drafts.
                 label = (
                     "chatting"
                     if turn.get("lane") == "chat"
@@ -429,15 +469,7 @@ class RoomView:
                     page.block("Needs attention", error, "class:warning")
                 quota = self.state.get("quotas", {}).get(name)
                 if quota:
-                    when = quota["retry_at"]
-                    retry = (
-                        "No automatic retry. Use /resume or /retry after resolving the limit."
-                        if when is None
-                        else "Retry due: "
-                        + datetime.fromtimestamp(when).astimezone().isoformat()
-                        + " (deferred while paused)."
-                    )
-                    page.block("Usage limit", quota["error"] + "\n" + retry, "class:warning")
+                    page.block("Usage limit", self.quota_details(quota), "class:warning")
             page.block("Execution permissions", self.permissions())
             page.add(f"Completed turns: {self.state.get('turns', 0)} · no round limit")
         elif view == "help":
@@ -715,6 +747,7 @@ class TeamUI:
             full_screen=True,
             mouse_support=True,
             min_redraw_interval=0.05,
+            refresh_interval=1.0,
             before_render=lambda app: self.paint(),
             after_render=self.after_render,
             style=Style.from_dict(
@@ -953,6 +986,8 @@ class TeamUI:
 
     def paint(self):
         key = (self.view, self.model.revision)
+        if self.view == "status" and self.model.state.get("quotas"):
+            key += (int(time.time()),)
         if key == self.painted or (not self.follow and self.painted is not None):
             return
         page = self.model.page(self.view, room_label=self.room_label())

@@ -177,23 +177,60 @@ class PresentationTests(unittest.TestCase):
     def test_quota_status_distinguishes_automatic_and_manual_recovery(self):
         self.view.handle(
             welcome(
+                paused=True,
+                reason="quota",
                 quotas={
                     "member_a": {
                         "backend": "claude",
                         "error": "Usage exhausted",
-                        "retry_at": 2_000_018_000,
+                        "retry_at": 2_000_000_630,
+                        "resets_at": 2_000_000_600,
+                        "retry_source": "provider",
                     },
                     "member_b": {"backend": "codex", "error": "Usage exhausted", "retry_at": None},
-                }
+                },
             )
         )
         statuses = dict(self.view.member_statuses())
-        self.assertEqual(statuses["member_a"], "Quota · cooldown")
-        self.assertEqual(statuses["member_b"], "Quota · manual resume")
+        self.assertEqual(statuses["member_a"], "Quota · waiting for reset")
+        self.assertEqual(statuses["member_b"], "Quota · reset unknown")
+        self.assertEqual(self.view.phase(), "Paused · usage limit")
+        self.assertIn("Team paused by a usage limit", self.view.guidance())
+        self.assertIn("all limited members recover", self.view.guidance())
         page = self.view.page("status").text
         self.assertIn("Retry due:", page)
         self.assertIn("No automatic retry", page)
-        self.assertIn("deferred while paused", page)
+        self.assertIn("deferred while manually paused", page)
+        self.assertIn("Timing source: unknown", page)
+
+    def test_quota_status_shows_provider_reset_and_remaining_wait(self):
+        quota = {
+            "backend": "codex",
+            "error": "Usage exhausted",
+            "retry_at": 2_000_000_630,
+            "retry_source": "provider",
+            "resets_at": 2_000_000_600,
+            "limit_type": "secondary",
+        }
+        self.view.handle(welcome(quotas={"member_a": quota}))
+        with patch("agent_team.tui.time.time", return_value=2_000_000_000):
+            page = self.view.page("status").text
+        self.assertIn("Limit window: secondary", page)
+        self.assertIn("Timing source: provider reset time + 30s safety buffer", page)
+        self.assertIn("Provider reset:", page)
+        self.assertIn("Remaining wait: 0h 10m 30s", page)
+        with patch("agent_team.tui.time.time", return_value=2_000_000_631):
+            self.assertIn("Retry is due", self.view.page("status").text)
+            quota["retrying"] = True
+            self.assertIn("Recovery check pending or in progress", self.view.page("status").text)
+
+    def test_recovery_checks_never_show_empty_public_drafts(self):
+        self.view.handle(welcome(paused=True, reason="quota"))
+        self.view.handle(turn(phase="recovery", lane="recovery"))
+        self.assertEqual(self.view.phase(), "Paused · checking quota recovery")
+        self.assertNotIn("Waiting for public output", self.view.page("conversation").text)
+        self.view.handle({"type": "state", "state": {"paused": True, "reason": "user"}})
+        self.assertNotIn("Known reset times trigger", self.view.guidance())
 
     def test_member_states_and_complete_errors_remain_available(self):
         self.view.handle(welcome(paused=False, messages=1, reason="running"))
@@ -630,6 +667,38 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
         await eventually(lambda: self.ui.view == "activity")
         self.assertIn("Resolve account access before retrying.", self.ui.body.text)
         self.assertNotIn('"type": "error"', self.ui.body.text)
+
+    async def test_quota_countdown_refreshes_without_server_events_or_losing_the_draft(self):
+        with patch("agent_team.tui.time.time", return_value=2_000_000_000) as clock:
+            self.ui.model.handle(
+                welcome(
+                    quotas={
+                        "member_a": {
+                            "backend": "claude",
+                            "error": "Usage exhausted",
+                            "retry_at": 2_000_000_630,
+                            "retry_source": "provider",
+                            "resets_at": 2_000_000_600,
+                        }
+                    }
+                )
+            )
+            self.ui.show("status")
+            await eventually(lambda: "Remaining wait: 0h 10m 30s" in self.ui.body.text)
+            self.pipe.send_text("Keep this draft")
+            await eventually(lambda: self.ui.input.text == "Keep this draft")
+            revision = self.ui.model.revision
+            clock.return_value += 1
+            await eventually(lambda: "Remaining wait: 0h 10m 29s" in self.ui.body.text)
+            self.assertEqual(self.ui.model.revision, revision)
+            self.assertEqual(self.ui.input.text, "Keep this draft")
+            self.assertTrue(self.ui.application.layout.has_focus(self.ui.input))
+            self.assertFalse(self.writer.requests)
+            self.ui.freeze()
+            snapshot = self.ui.body.text
+            clock.return_value += 5
+            self.ui.paint()
+            self.assertEqual(self.ui.body.text, snapshot)
 
     async def test_reading_with_mouse_freezes_the_snapshot(self):
         self.ui.model.handle(message(1, "\n".join(f"Line {i}" for i in range(80))))

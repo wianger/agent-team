@@ -8,6 +8,7 @@ import re
 import signal
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -25,8 +26,62 @@ class AdapterError(RuntimeError):
 class QuotaExceeded(AdapterError):
     """A native provider explicitly rejected work because usage was exhausted."""
 
+    def __init__(self, message: str, *, resets_at=None, limit_type=None):
+        super().__init__(message)
+        self.resets_at = resets_at
+        self.limit_type = limit_type if isinstance(limit_type, str) else None
 
-def provider_error(backend: str, detail: object) -> AdapterError:
+
+def reset_timestamp(value):
+    """Validate provider Unix seconds without interpreting strings or milliseconds."""
+    if type(value) in (int, float) and value > 0:
+        try:
+            datetime.fromtimestamp(value + 86400, UTC)  # Allow local-time formatting.
+        except (ValueError, OverflowError, OSError):
+            pass
+        else:
+            return value
+    return None
+
+
+def codex_quota_reset(response):
+    """Use an unambiguous bucket, waiting for every explicitly exhausted window."""
+    if not isinstance(response, dict):
+        return None, None
+    buckets = response.get("rateLimitsByLimitId")
+    if isinstance(buckets, dict) and buckets:
+        if len(buckets) != 1:
+            return None, None  # No reliable bucket selection; do not guess from the model name.
+        snapshot = next(iter(buckets.values()))
+    else:
+        snapshot = response.get("rateLimits")
+    if (
+        not isinstance(snapshot, dict)
+        or snapshot.get("spendControlReached")
+        or snapshot.get("rateLimitReachedType") not in (None, "rate_limit_reached")
+    ):
+        return None, None
+    exhausted = {}
+    for name in ("primary", "secondary"):
+        window = snapshot.get(name)
+        if window is None:
+            continue
+        if not isinstance(window, dict) or type(window.get("usedPercent")) not in (int, float):
+            return None, None
+        used = window["usedPercent"]
+        if not 0 <= used < float("inf"):
+            return None, None
+        if used >= 100:
+            reset = reset_timestamp(window.get("resetsAt"))
+            if reset is None:
+                return None, None
+            exhausted[name] = reset
+    return (max(exhausted.values()), "+".join(exhausted)) if exhausted else (None, None)
+
+
+def provider_error(
+    backend: str, detail: object, *, quota_info: dict | None = None, rate_limited: bool = False
+) -> AdapterError:
     """Classify provider errors, never ordinary assistant text or tool output."""
     text = detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False)
     quota = backend in {"claude", "codex"} and re.search(
@@ -38,7 +93,16 @@ def provider_error(backend: str, detail: object) -> AdapterError:
         text,
         re.IGNORECASE,
     )
-    return (QuotaExceeded if quota else AdapterError)(text)
+    # Only a rejected native window can supply the retry deadline. Advisory
+    # utilization warnings must not turn unrelated failures into quota errors.
+    info = quota_info or {}
+    if backend != "claude" or info.get("status") != "rejected":
+        info = {}
+    if quota or (info and rate_limited):
+        return QuotaExceeded(
+            text, resets_at=info.get("resetsAt"), limit_type=info.get("rateLimitType")
+        )
+    return AdapterError(text)
 
 
 class SessionUnavailable(AdapterError):
@@ -248,16 +312,20 @@ class EventDecoder:
             if kind == "rate_limit_event":
                 # Utilization warnings are advisory, not failed turns. Use this metadata
                 # only if a later native error actually rejects the current invocation.
-                self.quota_info = event.get("rate_limit_info") or {}
+                info = event.get("rate_limit_info")
+                self.quota_info = info if isinstance(info, dict) else {}
             if kind == "assistant" and event.get("error"):
                 detail = " ".join(
                     block.get("text", "")
                     for block in event.get("message", {}).get("content", [])
                     if block.get("type") == "text"
                 )
-                if event["error"] == "rate_limit" and self.quota_info.get("status") == "rejected":
-                    raise QuotaExceeded(detail or json.dumps(self.quota_info))
-                raise provider_error("claude", detail or event["error"])
+                raise provider_error(
+                    "claude",
+                    detail or event["error"],
+                    quota_info=self.quota_info,
+                    rate_limited=event["error"] == "rate_limit",
+                )
             if kind == "stream_event":
                 part = event.get("event", {}).get("delta", {})
                 if part.get("type") == "text_delta":
@@ -271,7 +339,9 @@ class EventDecoder:
             elif kind == "result":
                 if event.get("is_error") or event.get("subtype", "success") != "success":
                     raise provider_error(
-                        "claude", event.get("errors") or event.get("result") or event
+                        "claude",
+                        event.get("errors") or event.get("result") or event,
+                        quota_info=self.quota_info,
                     )
                 final = event.get("result") or self.claude_blocks
                 if not self.text:
@@ -429,7 +499,9 @@ class CLIAdapter:
             if code:
                 detail = stderr_output.decode(errors="replace").strip()
                 raise provider_error(
-                    self.agent.backend, f"CLI exit code {code}: {detail or 'no stderr'}"
+                    self.agent.backend,
+                    f"CLI exit code {code}: {detail or 'no stderr'}",
+                    quota_info=decoder.quota_info,
                 )
             decoder.finish()
             if persist_session and not decoder.session_id:
