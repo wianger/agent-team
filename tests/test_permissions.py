@@ -101,7 +101,7 @@ class PermissionTests(unittest.TestCase):
                 store.close()
 
     def test_full_access_does_not_expand_workflow_scope(self):
-        config = load_config(Path("team.toml"))
+        config = replace(load_config(Path("team.toml")), permission_mode="full_auto")
         for agent in config.agents:
             for concurrent in (False, True):
                 with self.subTest(backend=agent.backend, concurrent=concurrent):
@@ -138,7 +138,7 @@ class PermissionTests(unittest.TestCase):
                             self.assertIn("or use external tools", prompt)
 
     def test_full_auto_chat_research_does_not_grant_formal_work_authority(self):
-        config = load_config(Path("team.toml"))
+        config = replace(load_config(Path("team.toml")), permission_mode="full_auto")
         workflow = Workflow(config)
         workflow.data["phase"] = "implementation"
         prompt = build_prompt(config.agents[0], config, [], workflow, concurrent=True, lane="chat")

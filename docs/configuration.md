@@ -17,6 +17,8 @@ Generated configuration selects `chatroom` and `full_auto`; older configurations
 
 ## Permissions
 
+Full-auto depends on the model applying Claude's auto approval mode. Some models accept `--permission-mode auto` and run as `default` instead, which denies every write and fails each turn before it starts; `agent-team doctor` reports this for the model you configured. Use `phase_scoped` with those models.
+
 Full-auto applies throughout both chatroom and serial modes, including discussion, planning, judgment, review, and chat: Codex uses full access without sandbox restrictions; Claude uses native auto approval with all built-in tools, including web tools, not permission bypass. No phase-specific tool restrictions are applied. Native policies and host network restrictions still apply.
 
 Only the member holding the write lease may modify project files. In full-auto this is a workflow instruction and scheduling rule, not a sandbox guarantee; use a container or VM when isolation is required. Use `phase_scoped` for phase-specific restrictions. Custom adapters and acceptance checks do not inherit a native CLI sandbox. Automatic commits, pushes, and deployments are outside the default workflow. The server listens on loopback and authenticates clients with a private connection token.

@@ -7,6 +7,7 @@ context_mode = "incremental"
 interaction_mode = "chatroom"
 # Every phase: Codex full access; Claude auto approval with all built-in tools.
 # Use phase_scoped to restore the previous restricted execution modes.
+# Not every model applies auto approval; agent-team doctor checks the one you set.
 permission_mode = "full_auto"
 # There are no round, output-length, or shared-context limits.
 # Hard timeouts are opt-in, in seconds; 0 means wait until completion or interruption.

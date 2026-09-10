@@ -29,7 +29,7 @@ No preliminary `init` is needed. First launch creates `team.toml` if missing and
 
 Send your goal, constraints, and acceptance criteria to begin. No model is called before you send an idea or resume existing work. After consensus, implementation starts without another human approval step. Calls use each CLI's local authentication, settings, and quota; an omitted `model` uses its CLI default.
 
-Use `agent-team doctor` to check an existing configuration and executable availability; it does not verify authentication or quota. Startup options need no subcommand: `agent-team --config /path/to/team.toml --room /path/to/room`. Explicit configuration paths must exist. `agent-team init` remains optional when you want to configure the team before starting.
+Use `agent-team doctor` to check an existing configuration and executable availability. Under `full_auto` it also starts Claude briefly to confirm the model you configured actually applies auto approval — not every model does, and one that does not denies every write. It does not verify authentication or quota. Startup options need no subcommand: `agent-team --config /path/to/team.toml --room /path/to/room`. Explicit configuration paths must exist. `agent-team init` remains optional when you want to configure the team before starting.
 
 ## How collaboration works
 

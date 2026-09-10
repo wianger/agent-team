@@ -12,6 +12,7 @@ from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 
+from .adapters import command_for, terminate_process
 from .client import chat
 from .config import DEFAULT_CONFIG, demo_config, load_config
 from .server import Server
@@ -108,6 +109,43 @@ def load_team_config(path: Path, *, initialize=False):
         ) from exc
 
 
+async def reported_permission_mode(agent, workspace: Path) -> str | None:
+    """The permission mode the CLI actually applies, which need not be the one asked for.
+
+    A CLI can accept --permission-mode auto and still run in `default`, where every
+    write is denied. Presence on PATH cannot tell you that, so start it and read the
+    mode it reports, then stop it before it answers.
+    """
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command_for(agent, "discussion", permission_mode="full_auto"),
+            cwd=workspace,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        return None
+    try:
+        process.stdin.write(b"hi\n")
+        await process.stdin.drain()
+        process.stdin.close()
+        async with asyncio.timeout(90):
+            while line := await process.stdout.readline():
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict) and event.get("permissionMode"):
+                    return event["permissionMode"]
+        return None
+    except (TimeoutError, OSError):
+        return None
+    finally:
+        await terminate_process(process)
+
+
 async def run(args: argparse.Namespace) -> None:
     if getattr(args, "session", None) is not None:
         raise ValueError("Renamed in 0.2.0: --session is now --room")
@@ -125,9 +163,29 @@ async def run(args: argparse.Namespace) -> None:
             location = "built-in demo" if agent.backend == "mock" else shutil.which(executable)
             print(f"{agent.name} ({agent.backend}): {location or 'not installed / not on PATH'}")
             missing |= location is None
-        print("No models called. Live calls require authenticated CLIs and available quota.")
+        unusable = False
+        if config.permission_mode == "full_auto":
+            for agent in config.agents:
+                if agent.backend != "claude" or not shutil.which("claude"):
+                    continue
+                mode = await reported_permission_mode(agent, config.workspace)
+                if mode == "auto":
+                    print(f"{agent.name}: auto permission mode confirmed")
+                    continue
+                unusable = True
+                print(
+                    f"{agent.name}: claude applies {mode or 'no reported'} permission mode, "
+                    "not 'auto', so every full_auto turn will fail before it writes. "
+                    'Set permission_mode = "phase_scoped".'
+                )
+        print(
+            "Checking permissions starts each CLI briefly; no reply is requested. "
+            "Authentication and quota are not verified."
+        )
         if missing:
             raise ValueError("Install the missing CLIs and retry")
+        if unusable:
+            raise ValueError("Resolve the permission modes above and retry")
         return
     config = (
         replace(demo_config(), interaction_mode="chatroom")
