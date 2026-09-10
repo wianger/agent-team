@@ -49,7 +49,7 @@ class TeamConfig:
     interaction_mode: str = "serial"
     turn_timeout: float = 0
     work_timeout: float = 0
-    check_timeout: float = 0
+    acceptance_timeout: float = 0
     idle_warning_seconds: float = 120
     turn_delay: float = 0.8
 
@@ -69,7 +69,7 @@ class TeamConfig:
         for key in (
             "turn_timeout",
             "work_timeout",
-            "check_timeout",
+            "acceptance_timeout",
             "idle_warning_seconds",
             "turn_delay",
         ):
@@ -132,7 +132,7 @@ permission_mode = "full_auto"
 # Hard timeouts are opt-in, in seconds; 0 means wait until completion or interruption.
 turn_timeout = 0
 work_timeout = 0
-check_timeout = 0
+acceptance_timeout = 0
 # Warn once per idle period without cancelling; 0 disables warnings.
 idle_warning_seconds = 120
 turn_delay = 0.8

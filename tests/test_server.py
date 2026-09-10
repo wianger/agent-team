@@ -192,7 +192,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.server.room.reason, "user")
         self.assertEqual(len(self.server.room.messages), 1)
 
-    async def test_build_reaches_consensus_peer_judgment_and_verification_without_humans(self):
+    async def test_build_reaches_consensus_peer_judgment_and_acceptance_without_humans(self):
         await self.server.close()
         config = replace(demo_config(), workspace=self.path, turn_delay=0)
         self.server = Server(config, self.path)
@@ -207,12 +207,12 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         events = self.server.store.events()
         self.assertEqual(
             {e["phase"] for e in events if e["type"] == "floor.granted"},
-            {"discussion", "implementation", "judging", "review", "verification"},
+            {"discussion", "implementation", "judging", "review", "acceptance"},
         )
         self.assertFalse(any(e["type"] == "room.control" for e in events))
         final = self.server.store.messages()[-1]["workflow"]
         self.assertEqual(final["phase"], "completed")
-        self.assertEqual([r["exit_code"] for r in final["checks_result"]], [0])
+        self.assertEqual([r["exit_code"] for r in final["acceptance_results"]], [0])
         self.assertTrue((self.path / "hello.py").is_file())
         self.assertTrue((self.path / "HOWTO.md").is_file())
 
@@ -262,7 +262,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         reader, writer = await self.join("alice")
         welcome = await receive(reader)
         self.assertEqual(welcome["state"]["interaction_mode"], "chatroom")
-        self.assertEqual(welcome["state"]["workflow"]["checks_result"][0]["exit_code"], 0)
+        self.assertEqual(welcome["state"]["workflow"]["acceptance_results"][0]["exit_code"], 0)
         replay = await self.until(
             reader,
             lambda e: e["type"] == "message" and e.get("workflow", {}).get("phase") == "completed",

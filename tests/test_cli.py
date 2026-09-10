@@ -78,7 +78,7 @@ class ConfigurationTests(unittest.TestCase):
             configs.append(load_config(path))
         for config in configs:
             self.assertEqual(
-                (config.turn_timeout, config.work_timeout, config.check_timeout), (0, 0, 0)
+                (config.turn_timeout, config.work_timeout, config.acceptance_timeout), (0, 0, 0)
             )
             self.assertEqual(config.idle_warning_seconds, 120)
 
@@ -94,12 +94,12 @@ class ConfigurationTests(unittest.TestCase):
             path = Path(directory) / "team.toml"
             path.write_text(
                 '[team]\nworkflow="discussion"\nturn_timeout=7\nwork_timeout=8\n'
-                "check_timeout=9\nidle_warning_seconds=0\n"
+                "acceptance_timeout=9\nidle_warning_seconds=0\n"
                 '[[agents]]\nname="a"\nbackend="mock"\n'
             )
             config = load_config(path)
         self.assertEqual(
-            (config.turn_timeout, config.work_timeout, config.check_timeout), (7, 8, 9)
+            (config.turn_timeout, config.work_timeout, config.acceptance_timeout), (7, 8, 9)
         )
         self.assertEqual(config.idle_warning_seconds, 0)
 
@@ -498,7 +498,7 @@ class CLISmokeTests(unittest.IsolatedAsyncioTestCase):
                 )
                 final = messages[-1]["workflow"]
                 self.assertEqual(final["phase"], "completed")
-                self.assertEqual(final["checks_result"][0]["exit_code"], 0)
+                self.assertEqual(final["acceptance_results"][0]["exit_code"], 0)
                 self.assertTrue((Path(final["workspace"]) / "hello.py").is_file())
                 process.stdin.write(b"/quit\n")
                 await process.stdin.drain()

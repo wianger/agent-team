@@ -761,7 +761,7 @@ class QuotaRoomTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_quota_never_waives_consensus_or_transfers_the_write_lease(self):
         for mode in ("chatroom", "serial"):
-            for phase in ("discussion", "implementation", "judging", "verification"):
+            for phase in ("discussion", "implementation", "judging", "acceptance"):
                 room = self.start(Scripted(), Scripted(), mode, build=True, start=False)
                 room.workflow.apply("long", shared_plan())
                 room.start()

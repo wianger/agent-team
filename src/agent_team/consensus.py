@@ -56,7 +56,7 @@ def render_consensus(record: dict) -> str:
     lines.extend(
         ["## Scope and approach", "", proposal["summary"], "", "## Acceptance criteria", ""]
     )
-    for criterion in proposal["acceptance"]:
+    for criterion in proposal["acceptance_criteria"]:
         lines.extend(["- " + criterion.replace("\n", "\n  ")])
     lines.extend(
         [
@@ -77,7 +77,7 @@ def render_consensus(record: dict) -> str:
             "Commands are argv arrays, executed after peer and integration review.",
             "",
             "```json",
-            json.dumps(proposal["checks"], ensure_ascii=False, indent=2),
+            json.dumps(proposal["acceptance_checks"], ensure_ascii=False, indent=2),
             "```",
             "",
             "## Revising this consensus",

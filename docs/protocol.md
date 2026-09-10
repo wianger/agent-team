@@ -32,12 +32,12 @@ Discussion and eligible formal reviews can run concurrently. Writers/checks wait
 {
   "action": "propose",
   "summary": "Goal, scope, approach, assumptions, and tradeoffs",
-  "acceptance": ["Observable outcome"],
+  "acceptance_criteria": ["Observable outcome"],
   "tasks": [
     {"id":"T1","title":"Shared module","details":"Implement and judge the interface","depends_on":[]},
     {"id":"T2","title":"Shared tests","details":"Cover the acceptance criteria","depends_on":["T1"]}
   ],
-  "checks": [["python3","-m","unittest","discover","-s","tests"]]
+  "acceptance_checks": [["python3","-m","unittest","discover","-s","tests"]]
 }
 ```
 
@@ -115,7 +115,7 @@ After every peer accepts a checkpoint:
 
 Every revision must receive fresh judgments. Prior contributions and critiques remain in workflow state and the public conversation.
 
-## Integrated review and real verification
+## Integrated review and acceptance
 
 Once all milestones are accepted, every member reviews the entire integrated result in a non-writing `review` turn, including interactions with later changes. Full-auto permissions remain unchanged:
 
@@ -126,7 +126,7 @@ Once all milestones are accepted, every member reviews the entire integrated res
 
 A failed review reopens the named tasks and their downstream dependencies. Repairs return through checkpoints and peer judgment before another integration review.
 
-After unanimous integration approval, the coordinator executes `checks` in `verification`. All must exit 0 for `completed`; models cannot submit a completed action. Failure preserves complete output and actual exit codes, reopens shared work, and repeats without a repair-attempt budget.
+After unanimous integration approval, the coordinator executes `acceptance_checks` in `acceptance`. All must exit 0 for `completed`; models cannot submit a completed action. Failure preserves complete output and actual exit codes, reopens shared work, and repeats without a repair-attempt budget.
 
 ## Pausing, recovery, and floor control
 
@@ -158,9 +158,9 @@ Invalid actions, missing formal actions, nonzero agent exits, enabled hard timeo
 
 Hard timeouts default to `0` (disabled). `idle_warning_seconds` defaults to 120 and emits a transient `turn.idle` event with `speaker`, `turn_id`, `phase`, `idle_seconds`, and `text` after a period without observable output. One event is emitted per continuous silent period; activity rearms the observer. Stdout chunks (including non-public tool events and partial frames), stderr, and acceptance-command output count as activity. In-process adapters without activity callbacks are observed through their yielded reply deltas. Notices never contain the underlying private output, enter public model context, cancel work, change workflow state, or advance/invalidate session cursors. They are informational, not proof of failure. `/interrupt` remains available; setting `idle_warning_seconds = 0` disables notices.
 
-Recovery loads the workflow snapshot saved atomically with its message and starts paused. Pending peer approvals are cleared after restart; restarting final review or verification requires fresh integration reviews. Existing contribution and feedback history is preserved.
+Recovery loads the workflow snapshot saved atomically with its message and starts paused. Pending peer approvals are cleared after restart; restarting final review or acceptance requires fresh integration reviews. Existing contribution and feedback history is preserved.
 
-The room's `state` event contains `turns` (count since this server started), not a remaining budget. Automatic scheduling is uncapped. `/next` advances one eligible agent turn and pauses with `reason: "step_complete"`. In judgment, the author and peers who already approved are ineligible. During automatic verification, use `/resume`.
+The room's `state` event contains `turns` (count since this server started), not a remaining budget. Automatic scheduling is uncapped. `/next` advances one eligible agent turn and pauses with `reason: "step_complete"`. In judgment, the author and peers who already approved are ineligible. During automatic acceptance, use `/resume`.
 
 Custom backends receive `AGENT_TEAM_PHASE=judging` for peer inspection, distinct from `review` for final integration review. They must honor read-only phases themselves.
 

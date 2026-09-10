@@ -215,7 +215,7 @@ class ChatRoom(Room):
             if action == "next" and self.active:
                 raise ValueError("Use /interrupt and wait for all active turns before /next")
             if action == "next" and self.workflow:
-                if self.workflow.phase == "verification":
+                if self.workflow.phase == "acceptance":
                     raise ValueError("Acceptance checks are pending; use /resume")
                 if target:
                     self.workflow.choose(self.cursor, target)
@@ -251,7 +251,7 @@ class ChatRoom(Room):
         flow = self.workflow.clone() if self.workflow else None
         turn = Turn(name, phase, lane, head, fence, flow)
         member.active = turn
-        if phase in {"implementation", "verification"} and lane == "work":
+        if phase in {"implementation", "acceptance"} and lane == "work":
             if self.writer is not None:
                 raise RuntimeError("Workspace write lease already held")
             self.writer = name
@@ -314,7 +314,7 @@ class ChatRoom(Room):
         # actually finishes. New formal readers must not inspect a changing workspace.
         if self.writer is not None:
             writing = self.members[self.writer].active
-            if phase not in {"implementation", "verification"} or writing.fence[0] != self.revision:
+            if phase not in {"implementation", "acceptance"} or writing.fence[0] != self.revision:
                 return
         if phase == "completed":
             self.manual_paused, self.reason = True, "completed"
@@ -326,9 +326,9 @@ class ChatRoom(Room):
             if name:
                 self.launch(name, phase, "work", force=True)
             return
-        if phase in {"implementation", "verification"}:
+        if phase in {"implementation", "acceptance"}:
             if not work:
-                if phase == "verification":
+                if phase == "acceptance":
                     self.launch("system", phase, "work")
                 else:
                     name = self.choose()
@@ -347,7 +347,7 @@ class ChatRoom(Room):
                 return
         for name in self.adapters:
             if name in primary:
-                if phase not in {"implementation", "verification"}:
+                if phase not in {"implementation", "acceptance"}:
                     self.launch(name, phase, "work")
             else:
                 self.launch(name, phase, "chat")
@@ -509,10 +509,10 @@ class ChatRoom(Room):
             on_activity=lambda: self.report_activity(name, turn.turn_id, turn.fence[0]),
         ) as activity:
             if name == "system":
-                results = await self.verify(turn.turn_id, activity)
+                results = await self.run_acceptance(turn.turn_id, activity)
                 if turn.fence[0] != self.revision:
                     raise asyncio.CancelledError
-                self.accept_verification(results, turn.turn_id)
+                self.record_acceptance(results, turn.turn_id)
                 return "completed"
             options = {}
             if session_plan:

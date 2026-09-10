@@ -573,7 +573,7 @@ class MockAdapter:
                     {
                         "action": "propose",
                         "summary": "Demo: build a shared Python greeting function and guide",
-                        "acceptance": [
+                        "acceptance_criteria": [
                             "hello('team') returns Hello, team!",
                             "Provide usage instructions",
                         ],
@@ -593,7 +593,7 @@ class MockAdapter:
                                 "depends_on": ["code"],
                             },
                         ],
-                        "checks": [
+                        "acceptance_checks": [
                             [
                                 sys.executable,
                                 "-c",

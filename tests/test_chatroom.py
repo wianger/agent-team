@@ -315,7 +315,7 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
         room = self.start(adapters, config)
         await self.until(lambda: room.reason == "completed" and not room.active, 10)
         final = room.workflow.snapshot()
-        self.assertEqual([r["exit_code"] for r in final["checks_result"]], [0])
+        self.assertEqual([r["exit_code"] for r in final["acceptance_results"]], [0])
         for task in final["proposal"]["tasks"]:
             point = task["contributions"][-1]
             self.assertEqual(
@@ -327,7 +327,7 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
             if event["type"] == "turn.started":
                 active[event["turn_id"]] = event
                 work = [e for e in active.values() if e["lane"] == "work"]
-                writers = [e for e in work if e["phase"] in {"implementation", "verification"}]
+                writers = [e for e in work if e["phase"] in {"implementation", "acceptance"}]
                 self.assertLessEqual(len(writers), 1)
                 if writers:
                     self.assertEqual(len(work), 1)
@@ -342,7 +342,7 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
     async def test_peer_failure_interrupts_checks_and_rejects_late_success(self):
         checking, cancelled, failure_gate = (asyncio.Event() for _ in range(3))
 
-        async def verify(turn_id, activity):
+        async def run_acceptance(turn_id, activity):
             checking.set()
             try:
                 await asyncio.Event().wait()
@@ -360,8 +360,8 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
             agents=(AgentConfig("a", "mock"), AgentConfig("b", "mock")),
         )
         room = self.start({"a": a, "b": b}, config)
-        room.workflow.data["phase"] = "verification"
-        room.verify = verify
+        room.workflow.data["phase"] = "acceptance"
+        room.run_acceptance = run_acceptance
         await self.until(lambda: checking.is_set() and a.calls and b.calls)
         self.assertEqual(room.writer, "system")
         failure_gate.set()
@@ -369,8 +369,8 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cancelled.is_set())
         self.assertTrue(room.manual_paused)
         self.assertIsNone(room.writer)
-        self.assertEqual(room.workflow.phase, "verification")
-        self.assertFalse(room.workflow.data["checks_result"])
+        self.assertEqual(room.workflow.phase, "acceptance")
+        self.assertFalse(room.workflow.data["acceptance_results"])
         self.assertNotIn("Stale chat", [m["text"] for m in room.messages])
         self.assertNotIn("Stale success", "\n".join(m["text"] for m in room.messages))
 

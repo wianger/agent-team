@@ -20,7 +20,7 @@ PHASES = {
     "implementation": "Shared implementation",
     "judging": "Peer judgment",
     "review": "Integration review",
-    "verification": "Acceptance checks",
+    "acceptance_criteria": "Acceptance checks",
     "completed": "Completed",
 }
 
@@ -67,7 +67,7 @@ def texts(value: object, label: str, *, allow_empty: bool = False) -> list[str]:
 
 def validate_plan(action: dict, members: list[str]) -> dict:
     summary = nonempty(action.get("summary"), "summary")
-    acceptance = texts(action.get("acceptance"), "acceptance")
+    acceptance = texts(action.get("acceptance_criteria"), "acceptance")
     raw_tasks = action.get("tasks")
     if not isinstance(raw_tasks, list) or not raw_tasks:
         raise ValueError("A proposal needs at least one shared task")
@@ -102,7 +102,7 @@ def validate_plan(action: dict, members: list[str]) -> dict:
         if not ready:
             raise ValueError("Task dependencies contain a cycle, self-reference, or unknown id")
         visited.update(t["id"] for t in ready)
-    checks = action.get("checks")
+    checks = action.get("acceptance_checks")
     if not isinstance(checks, list) or not checks:
         raise ValueError("A proposal needs at least one executable acceptance command")
     for check in checks:
@@ -113,7 +113,12 @@ def validate_plan(action: dict, members: list[str]) -> dict:
             or not check[0]
         ):
             raise ValueError("Each check must be a nonempty command argument array")
-    return {"summary": summary, "acceptance": acceptance, "tasks": tasks, "checks": checks}
+    return {
+        "summary": summary,
+        "acceptance_criteria": acceptance,
+        "tasks": tasks,
+        "acceptance_checks": checks,
+    }
 
 
 class Workflow:
@@ -130,7 +135,7 @@ class Workflow:
                 "approvals": [],
                 "objections": {},
                 "review_approvals": [],
-                "checks_result": [],
+                "acceptance_results": [],
                 "members": self.members,
                 "workspace": str(config.workspace.resolve()),
             }
@@ -170,7 +175,7 @@ class Workflow:
                 "proposal": copy.deepcopy(self.data["proposal"]),
                 "checkpoint": copy.deepcopy(self.data["checkpoint"]),
                 "feedback": copy.deepcopy(self.data["feedback"]),
-                "checks_result": copy.deepcopy(self.data["checks_result"]),
+                "acceptance_results": copy.deepcopy(self.data["acceptance_results"]),
             }
         self.data["revision_request"] = (
             {"speaker": speaker, "reason": reason} if self.data["version"] else None
@@ -181,7 +186,7 @@ class Workflow:
             approvals=[],
             objections={},
             review_approvals=[],
-            checks_result=[],
+            acceptance_results=[],
             checkpoint=None,
             next_writer=None,
             feedback=[],
@@ -285,7 +290,7 @@ class Workflow:
                 approvals=[],
                 objections={},
                 review_approvals=[],
-                checks_result=[],
+                acceptance_results=[],
                 checkpoint=None,
                 next_writer=None,
                 feedback=[],
@@ -342,7 +347,7 @@ class Workflow:
             if speaker not in self.data["review_approvals"]:
                 self.data["review_approvals"].append(speaker)
             if set(self.data["review_approvals"]) == set(self.members):
-                self.data["phase"] = "verification"
+                self.data["phase"] = "acceptance"
             return f"{speaker} approves the integrated result: {evidence}"
         raise ValueError(f"Phase {self.phase} does not accept action {kind}")
 
@@ -436,22 +441,22 @@ class Workflow:
             if task["id"] in ids:
                 task.update(status="pending", report=None)
         self.data.update(
-            phase="implementation", review_approvals=[], checks_result=[], checkpoint=None
+            phase="implementation", review_approvals=[], acceptance_results=[], checkpoint=None
         )
 
-    def verified(self, results: list[dict]) -> str:
-        if self.phase != "verification":
-            raise ValueError("Not in the verification phase")
+    def accepted(self, results: list[dict]) -> str:
+        if self.phase != "acceptance":
+            raise ValueError("Not in the acceptance phase")
         if (
             results
-            and len(results) == len(self.data["proposal"]["checks"])
+            and len(results) == len(self.data["proposal"]["acceptance_checks"])
             and all(r["exit_code"] == 0 for r in results)
         ):
-            self.data.update(phase="completed", checks_result=results)
+            self.data.update(phase="completed", acceptance_results=results)
             return "Shared work, peer judgments, integration reviews, and acceptance checks passed."
         self.reopen({t["id"] for t in self.data["proposal"]["tasks"]})
-        self.data["checks_result"] = results
-        return "Acceptance checks failed. Continue shared repairs, peer judgment, and verification."
+        self.data["acceptance_results"] = results
+        return "Acceptance checks failed. Continue shared repairs, peer judgment, and acceptance."
 
 
 def workflow_instructions(workflow: Workflow, speaker: str) -> str:
@@ -488,9 +493,10 @@ def workflow_instructions(workflow: Workflow, speaker: str) -> str:
             "what remains valid; inspect and reuse existing artifacts where appropriate. "
             "Previous contributions are context, not automatic acceptance of revised milestones.\n"
             'Proposal: {"action":"propose","summary":"goal, approach, assumptions and tradeoffs",'
-            '"acceptance":["checkable requirement"],"tasks":[{"id":"T1","title":"Shared milestone",'
+            '"acceptance_criteria":["checkable requirement"],'
+            '"tasks":[{"id":"T1","title":"Shared milestone",'
             '"details":"what to implement and judge","depends_on":[]}],'
-            '"checks":[["python3","-m","unittest","discover","-s","tests"]]}\n'
+            '"acceptance_checks":[["python3","-m","unittest","discover","-s","tests"]]}\n'
             "Choose meaningful, noninteractive acceptance commands. The coordinator "
             "actually executes these argv arrays after reviews; an echo is not a check.\n"
             f'Approve: {{"action":"approve","version":{version}}}; '

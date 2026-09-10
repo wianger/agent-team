@@ -137,7 +137,7 @@ def describe_workflow(state: dict | None) -> str:
         [
             proposal["summary"],
             "Approvals: " + (", ".join(state["approvals"]) or "none"),
-            "Acceptance: " + "; ".join(proposal["acceptance"]),
+            "Acceptance: " + "; ".join(proposal["acceptance_criteria"]),
         ]
     )
     for speaker, reason in state["objections"].items():
@@ -165,8 +165,8 @@ def describe_workflow(state: dict | None) -> str:
     for item in state.get("feedback", []):
         lines.append(f"Feedback · {item['speaker']}: {item['evidence']}")
     lines.append("Integration approvals: " + (", ".join(state["review_approvals"]) or "none"))
-    lines.extend("Acceptance command: " + repr(argv) for argv in proposal["checks"])
-    lines.extend(f"Acceptance exit code: {r['exit_code']}" for r in state["checks_result"])
+    lines.extend("Acceptance command: " + repr(argv) for argv in proposal["acceptance_checks"])
+    lines.extend(f"Acceptance exit code: {r['exit_code']}" for r in state["acceptance_results"])
     return "\n".join(lines) + "\n"
 
 

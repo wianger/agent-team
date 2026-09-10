@@ -7,7 +7,7 @@ from pathlib import Path
 from .adapters import terminate_process
 
 
-async def run_checks(
+async def run_acceptance_checks(
     commands: list[list[str]],
     workspace: Path,
     deadline_seconds: float,

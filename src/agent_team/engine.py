@@ -8,6 +8,7 @@ from collections.abc import Callable
 from contextlib import aclosing
 from datetime import UTC, datetime
 
+from .acceptance import run_acceptance_checks
 from .activity import observe_activity
 from .adapters import (
     Adapter,
@@ -22,7 +23,6 @@ from .consensus import write_consensus
 from .context import PASS, build_prompt
 from .sessions import Sessions
 from .store import Store
-from .verification import run_checks
 from .workflow import Workflow, parse_action
 
 QUOTA_RESET_BUFFER_SECONDS = 30
@@ -46,7 +46,7 @@ class Room:
         self.messages = store.messages()
         saved = next((m["workflow"] for m in reversed(self.messages) if "workflow" in m), None)
         self.workflow = Workflow(config, saved) if config.workflow == "build" else None
-        if self.workflow and saved and self.workflow.phase in {"review", "verification"}:
+        if self.workflow and saved and self.workflow.phase in {"review", "acceptance"}:
             self.workflow.data.update(phase="review", review_approvals=[])
         if self.workflow and saved and self.workflow.phase == "judging":
             self.workflow.data["checkpoint"]["approvals"] = []
@@ -113,7 +113,7 @@ class Room:
             "permission_mode": self.config.permission_mode,
             "interaction_mode": "serial",
             "writer": self.active["speaker"]
-            if self.active and self.active["phase"] in {"implementation", "verification"}
+            if self.active and self.active["phase"] in {"implementation", "acceptance"}
             else None,
             "sessions": self.store.sessions(),
             "quotas": {
@@ -386,7 +386,7 @@ class Room:
                 )
             if self.workflow and self.workflow.phase == "completed":
                 raise ValueError("Idea completed; send a new idea or revision to collaborate again")
-            if self.workflow and self.workflow.phase == "verification" and action == "next":
+            if self.workflow and self.workflow.phase == "acceptance" and action == "next":
                 raise ValueError("Acceptance checks are pending; use /resume")
             if target is not None and target not in self.adapters:
                 raise ValueError(f"Unknown agent: {target}")
@@ -441,8 +441,8 @@ class Room:
             warn,
             on_activity=lambda: self.report_activity(name, turn_id, revision),
         ) as activity:
-            if phase == "verification":
-                return await self.verify(turn_id, activity)
+            if phase == "acceptance":
+                return await self.run_acceptance(turn_id, activity)
             return await self.collect(
                 name, prompt, turn_id, revision, phase, session_plan, activity
             )
@@ -575,22 +575,22 @@ class Room:
                 )
             self.ensure_consensus_documents()
 
-    async def verify(
+    async def run_acceptance(
         self, turn_id: str, on_activity: Callable[[], None] | None = None
     ) -> list[dict]:
-        return await run_checks(
-            self.workflow.data["proposal"]["checks"],
+        return await run_acceptance_checks(
+            self.workflow.data["proposal"]["acceptance_checks"],
             self.config.workspace,
-            self.config.check_timeout,
+            self.config.acceptance_timeout,
             lambda text: self.emit(
                 "delta", durable=False, speaker="system", turn_id=turn_id, text=text
             ),
             on_activity=on_activity,
         )
 
-    def accept_verification(self, results: list[dict], turn_id: str) -> None:
+    def record_acceptance(self, results: list[dict], turn_id: str) -> None:
         candidate = self.workflow.clone()
-        note = candidate.verified(results)
+        note = candidate.accepted(results)
         details = "\n".join(
             f"{r['command']!r} → exit {r['exit_code']}\n{r['output']}" for r in results
         )
@@ -625,7 +625,7 @@ class Room:
             phase = (
                 "recovery" if recovering else self.workflow.phase if self.workflow else "discussion"
             )
-            verifying = phase == "verification"
+            accepting = phase == "acceptance"
             if phase == "completed":
                 self.manual_paused, self.reason = True, "completed"
                 self.state()
@@ -634,7 +634,7 @@ class Room:
                 next((n for n in self.adapters if n in self.quota_retries), None)
                 if recovering
                 else "system"
-                if verifying
+                if accepting
                 else self.choose(self.next_target)
             )
             self.next_target = None
@@ -646,7 +646,7 @@ class Room:
             turn_id = uuid.uuid4().hex
             through = self.messages[-1]["id"]
             session_plan = None
-            if not verifying and not recovering:
+            if not accepting and not recovering:
                 if self.config.context_mode == "session" and getattr(
                     self.adapters[name], "supports_sessions", False
                 ):
@@ -661,7 +661,7 @@ class Room:
                     QUOTA_PROBE_PROMPT
                     if recovering
                     else "Execute unanimously accepted checks"
-                    if verifying
+                    if accepting
                     else build_prompt(
                         agent,
                         self.config,
@@ -704,17 +704,17 @@ class Room:
             outcome = "cancelled"
             try:
                 result = await self.active_task
-                reply, session_update = (result, None) if verifying else result
+                reply, session_update = (result, None) if accepting else result
                 if revision == self.revision and not self.closed:
                     self.turns += 1
-                    if not verifying:
+                    if not accepting:
                         self.cursor = ([a.name for a in self.config.agents].index(name) + 1) % len(
                             self.config.agents
                         )
                     if recovering:
                         outcome = "recovered"
-                    elif verifying:
-                        self.accept_verification(reply, turn_id)
+                    elif accepting:
+                        self.record_acceptance(reply, turn_id)
                         outcome = "completed"
                     elif reply == PASS and (not self.workflow or phase == "discussion"):
                         outcome = "passed"
@@ -729,7 +729,7 @@ class Room:
                         outcome = "completed"
                         self.passes.clear()
                         self.accept_reply(name, reply, turn_id, session_update)
-                    if not verifying:
+                    if not accepting:
                         self.quota_succeeded(name)
                     if not self.manual_paused:
                         if len(self.passes) == len(self.config.agents):
@@ -762,7 +762,7 @@ class Room:
                             )
                         )
             finally:
-                if not verifying and outcome not in {"completed", "passed", "recovered"}:
+                if not accepting and outcome not in {"completed", "passed", "recovered"}:
                     self.quota_retries.discard(name)
                     if not recovering:
                         self.sessions.suspend(

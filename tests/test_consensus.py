@@ -23,7 +23,7 @@ def proposal(summary="Build a small shared module"):
     return {
         "action": "propose",
         "summary": summary,
-        "acceptance": ["The agreed behavior is covered by tests"],
+        "acceptance_criteria": ["The agreed behavior is covered by tests"],
         "tasks": [
             {
                 "id": "code",
@@ -32,7 +32,7 @@ def proposal(summary="Build a small shared module"):
                 "depends_on": [],
             }
         ],
-        "checks": [["python3", "-m", "unittest", "discover", "-s", "tests"]],
+        "acceptance_checks": [["python3", "-m", "unittest", "discover", "-s", "tests"]],
     }
 
 

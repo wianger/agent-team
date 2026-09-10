@@ -20,11 +20,13 @@ def shared_plan():
     return {
         "action": "propose",
         "summary": "Build an addition function together",
-        "acceptance": ["add(2, 3) returns 5"],
+        "acceptance_criteria": ["add(2, 3) returns 5"],
         "tasks": [
             {"id": "code", "title": "Addition", "details": "Implement add", "depends_on": []}
         ],
-        "checks": [[sys.executable, "-c", "from calc import add; assert add(2, 3) == 5"]],
+        "acceptance_checks": [
+            [sys.executable, "-c", "from calc import add; assert add(2, 3) == 5"]
+        ],
     }
 
 
@@ -160,11 +162,11 @@ class JudgmentTests(unittest.TestCase):
     def test_proposals_and_evidence_have_no_text_or_count_caps(self):
         proposal = shared_plan()
         proposal["summary"] = "x" * 250_000
-        proposal["acceptance"] *= 40
+        proposal["acceptance_criteria"] *= 40
         proposal["tasks"] = [
             {**proposal["tasks"][0], "id": f"T{i}", "details": "d" * 10_000} for i in range(35)
         ]
-        proposal["checks"] *= 12
+        proposal["acceptance_checks"] *= 12
         validated = validate_plan(proposal, self.flow.members)
         self.assertEqual(validated["summary"], proposal["summary"])
         self.assertEqual(len(validated["tasks"]), 35)
@@ -263,7 +265,7 @@ class CollaborationIntegrationTests(unittest.IsolatedAsyncioTestCase):
             turn_delay=0,
             turn_timeout=0,
             work_timeout=0,
-            check_timeout=0,
+            acceptance_timeout=0,
         )
         store = Store(workspace / "events.sqlite3")
         self.addCleanup(store.close)
@@ -289,7 +291,7 @@ class CollaborationIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(history[0]["judgments"][0]["action"], "judge_fail")
         self.assertEqual(history[1]["judgments"][0]["speaker"], "b")
         self.assertEqual(history[1]["judgments"][0]["action"], "judge_pass")
-        self.assertEqual(room.workflow.data["checks_result"][0]["exit_code"], 0)
+        self.assertEqual(room.workflow.data["acceptance_results"][0]["exit_code"], 0)
         room.say("human", "Now consider a follow-up improvement")
         room.control("pause")
         self.assertEqual(room.workflow.phase, "discussion")

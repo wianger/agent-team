@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from agent_team.acceptance import run_acceptance_checks
 from agent_team.activity import observe_activity
 from agent_team.adapters import AdapterError, CLIAdapter
 from agent_team.config import AgentConfig, TeamConfig
@@ -14,7 +15,6 @@ from agent_team.context import PASS
 from agent_team.engine import Room
 from agent_team.store import Store
 from agent_team.streams import iter_lines
-from agent_team.verification import run_checks
 
 
 async def eventually(predicate):
@@ -270,7 +270,7 @@ class CheckActivityTests(unittest.IsolatedAsyncioTestCase):
         notices = []
         with tempfile.TemporaryDirectory() as directory:
             async with observe_activity(0.03, notices.append) as touch:
-                results = await run_checks(
+                results = await run_acceptance_checks(
                     [[sys.executable, "-c", "import time; time.sleep(0.15); print('passed')"]],
                     Path(directory),
                     0,
@@ -284,7 +284,7 @@ class CheckActivityTests(unittest.IsolatedAsyncioTestCase):
     async def test_acceptance_command_chunks_are_activity(self):
         activity = []
         with tempfile.TemporaryDirectory() as directory:
-            results = await run_checks(
+            results = await run_acceptance_checks(
                 [[sys.executable, "-c", "print('test output')"]],
                 Path(directory),
                 0,

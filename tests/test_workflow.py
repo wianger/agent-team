@@ -8,12 +8,12 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
+from agent_team.acceptance import run_acceptance_checks
 from agent_team.adapters import EventDecoder, MockAdapter, command_for
 from agent_team.config import AgentConfig, TeamConfig, demo_config
 from agent_team.engine import Room
 from agent_team.server import Server
 from agent_team.store import Store
-from agent_team.verification import run_checks
 from agent_team.workflow import Workflow, action_reply, parse_action, validate_plan, visible_text
 
 
@@ -21,7 +21,7 @@ def plan():
     return {
         "action": "propose",
         "summary": "Implement and document a function",
-        "acceptance": ["function returns the expected value"],
+        "acceptance_criteria": ["function returns the expected value"],
         "tasks": [
             {
                 "id": "code",
@@ -38,7 +38,7 @@ def plan():
                 "depends_on": ["code"],
             },
         ],
-        "checks": [[sys.executable, "-c", "assert 1 + 1 == 2"]],
+        "acceptance_checks": [[sys.executable, "-c", "assert 1 + 1 == 2"]],
     }
 
 
@@ -83,7 +83,7 @@ class WorkflowTests(unittest.TestCase):
                     "task_id": task_id,
                     "summary": "written",
                     "files": [filename],
-                    "tests": "waiting for verification",
+                    "tests": "waiting for acceptance",
                 },
             )
 
@@ -128,13 +128,13 @@ class WorkflowTests(unittest.TestCase):
         self.flow.apply("b", {"action": "approve", "version": 1})
         self.assertEqual(self.flow.phase, "implementation")
 
-    def test_invalid_dependencies_and_verification_commands_rejected(self):
+    def test_invalid_dependencies_and_acceptance_commands_rejected(self):
         for mutate in (
             lambda p: p["tasks"][0].update(depends_on=["docs"]),
             lambda p: p["tasks"][0].update(depends_on=["missing"]),
             lambda p: p["tasks"][0].update(owner="outsider"),
-            lambda p: p.update(checks=[]),
-            lambda p: p.update(checks=["echo success"]),
+            lambda p: p.update(acceptance_checks=[]),
+            lambda p: p.update(acceptance_checks=["echo success"]),
         ):
             value = plan()
             mutate(value)
@@ -166,8 +166,10 @@ class WorkflowTests(unittest.TestCase):
         self.flow.apply("a", {"action": "review_pass", "version": 1, "evidence": "checked files"})
         self.assertEqual(self.flow.phase, "review")
         self.flow.apply("b", {"action": "review_pass", "version": 1, "evidence": "checked files"})
-        self.assertEqual(self.flow.phase, "verification")
-        self.flow.verified([{"command": plan()["checks"][0], "exit_code": 0, "output": ""}])
+        self.assertEqual(self.flow.phase, "acceptance")
+        self.flow.accepted(
+            [{"command": plan()["acceptance_checks"][0], "exit_code": 0, "output": ""}]
+        )
         self.assertEqual(self.flow.phase, "completed")
 
     def test_review_failure_reopens_upstream_and_dependents(self):
@@ -243,7 +245,7 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
             while not predicate():
                 await asyncio.sleep(0.005)
 
-    async def test_complete_pipeline_has_unanimity_before_writes_and_verified_artifacts(self):
+    async def test_complete_pipeline_has_unanimity_before_writes_and_accepted_artifacts(self):
         events = []
         self.room = Room(self.config, self.store, lambda e: events.append(copy.deepcopy(e)))
         self.room.start()
@@ -254,14 +256,14 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(implementing["approvals"]), {"member_a", "member_b"})
         self.assertTrue((self.workspace / "hello.py").is_file())
         self.assertTrue((self.workspace / "HOWTO.md").is_file())
-        self.assertEqual(self.room.workflow.data["checks_result"][0]["exit_code"], 0)
+        self.assertEqual(self.room.workflow.data["acceptance_results"][0]["exit_code"], 0)
         stages = [e["phase"] for e in events if e["type"] == "floor.granted"]
         self.assertEqual(
             stages,
             ["discussion"] * 3
             + ["implementation", "judging"] * 2
             + ["review"] * 2
-            + ["verification"],
+            + ["acceptance"],
         )
         with self.assertRaises(ValueError):
             self.room.control("resume")
@@ -278,14 +280,14 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.room.workflow.data["proposal"]["tasks"]), 2)
 
     async def test_failed_and_timed_out_checks_do_not_count_as_success(self):
-        results = await run_checks(
+        results = await run_acceptance_checks(
             [[sys.executable, "-c", "raise SystemExit(7)"]],
             self.workspace,
             2,
             lambda text: None,
         )
         self.assertEqual(results[0]["exit_code"], 7)
-        timed = await run_checks(
+        timed = await run_acceptance_checks(
             [[sys.executable, "-c", "import time; time.sleep(60)"]],
             self.workspace,
             0.1,
@@ -354,13 +356,13 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
             any((m.get("action") or {}).get("action") == "task_done" for m in self.room.messages)
         )
 
-    async def test_failed_verification_returns_to_shared_repairs_until_success(self):
+    async def test_failed_acceptance_returns_to_shared_repairs_until_success(self):
         class RepairingCheckAdapter(MockAdapter):
             def workflow_reply(self, state):
                 reply = super().workflow_reply(state)
                 if not state["proposal"]:
                     display, action = parse_action(reply)
-                    action["checks"] = [
+                    action["acceptance_checks"] = [
                         [
                             sys.executable,
                             "-c",
@@ -379,7 +381,7 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self.wait_until(lambda: self.room.reason == "completed")
         self.assertEqual((self.workspace / "attempts").read_text(), "3")
         results = [
-            m["workflow"]["checks_result"] for m in self.room.messages if m["role"] == "system"
+            m["workflow"]["acceptance_results"] for m in self.room.messages if m["role"] == "system"
         ]
         self.assertEqual([r[0]["exit_code"] for r in results], [3, 3, 0])
         self.assertGreater(self.room.turns, 8)
@@ -397,7 +399,7 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.room.workflow.phase, "discussion")
         self.room.control("pause")
 
-    async def test_restart_before_verification_requires_fresh_reviews(self):
+    async def test_restart_before_acceptance_requires_fresh_reviews(self):
         flow = Workflow(self.config)
         flow.apply(
             "member_a",
@@ -414,7 +416,7 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 ],
             },
         )
-        flow.data.update(phase="verification", review_approvals=["member_a", "member_b"])
+        flow.data.update(phase="acceptance", review_approvals=["member_a", "member_b"])
         self.store.append(
             "message", role="agent", speaker="member_b", text="Reviewed", workflow=flow.snapshot()
         )
@@ -424,7 +426,7 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.room.manual_paused)
 
     async def test_acceptance_output_is_preserved_in_full(self):
-        results = await run_checks(
+        results = await run_acceptance_checks(
             [[sys.executable, "-c", "print('first'+'x'*300000+'last')"]],
             self.workspace,
             0,
