@@ -25,6 +25,9 @@ from .sessions import Sessions
 from .store import Store
 from .workflow import Workflow, parse_action
 
+# Pauses a human must resolve, as opposed to ones they chose.
+PAUSED_FOR_INPUT = {"stalled", "blocked", "error", "document_error", "no_consensus"}
+
 QUOTA_RESET_BUFFER_SECONDS = 30
 QUOTA_PROBE_PROMPT = (
     "Availability check only. Reply with [[PASS]] to confirm you can respond. "
@@ -62,6 +65,9 @@ class Room:
         self.next_target: str | None = None
         self.passes: set[str] = set()
         self.manual_paused = bool(self.messages)
+        # A restarted room is paused, but nobody chose that pause. It yields to a due
+        # quota reset so a run can span a reset window with no human present.
+        self.restart_paused = self.manual_paused
         self.reason = "restart" if self.messages else "waiting"
         self.revision = 0
         self.active: dict | None = None
@@ -97,13 +103,30 @@ class Room:
         self.broadcast(event)
         return event
 
+    def paused_by_human(self) -> bool:
+        """A human's pause holds through a quota reset; a restart pause does not."""
+        return self.manual_paused and not self.restart_paused
+
+    def room_state(self) -> str:
+        """The room's lifecycle, as one name rather than a derivation of four flags."""
+        if not self.messages:
+            return "waiting"
+        if self.reason == "completed":
+            return "completed"
+        if self.quotas:
+            return "paused_by_quota"
+        if self.manual_paused:
+            if not self.restart_paused and self.reason in PAUSED_FOR_INPUT:
+                return "paused_for_input"
+            return "paused_by_human"
+        return "running"
+
     def status(self) -> dict:
+        state = self.room_state()
         return {
             "agents": [{"name": a.name, "backend": a.backend} for a in self.config.agents],
-            "paused": self.manual_paused
-            or bool(self.quotas)
-            or not self.messages
-            or self.reason == "completed",
+            "room_state": state,
+            "paused": state != "running",
             "reason": self.reason,
             "turns": self.turns,
             "active": self.active,
@@ -155,7 +178,9 @@ class Room:
             self.clear_quota(name)
             self.publish_system(f"{name} recovered from its usage limit and rejoined the team.")
             if not self.quotas and not self.manual_paused:
-                self.reason = "running"
+                # Not "running" yet: no turn is scheduled, and a room that claims to be
+                # running with nothing active is indistinguishable from an idle one.
+                self.reason = "recovering"
 
     def record_quota(self, name: str, error: Exception, turn_id: str) -> bool:
         backend = next((a.backend for a in self.config.agents if a.name == name), None)
@@ -200,7 +225,7 @@ class Room:
         return True
 
     def retry_due_quotas(self) -> None:
-        if self.closed or self.manual_paused:
+        if self.closed or self.paused_by_human():
             return
         for name, quota in self.quotas.items():
             if (
@@ -210,6 +235,9 @@ class Room:
             ):
                 self.quota_retries.add(name)
                 self.on_quota_retry(name)
+                if self.restart_paused:
+                    self.manual_paused = self.restart_paused = False
+                    self.reason = "recovering"
                 self.publish_system(f"Checking {name} after the provider's quota reset.")
 
     def on_quota_retry(self, name: str) -> None:
@@ -219,7 +247,7 @@ class Room:
         if self.quota_timer:
             self.quota_timer.cancel()
             self.quota_timer = None
-        if self.closed or self.manual_paused or not self.messages:
+        if self.closed or self.paused_by_human() or not self.messages:
             return
         due = [
             quota["retry_at"]
@@ -330,6 +358,7 @@ class Room:
             self.active_task.cancel()
 
     def say(self, speaker: str, text: str) -> None:
+        self.restart_paused = False
         if not isinstance(text, str) or not text.strip():
             raise ValueError("Message must be nonempty text")
         self.cancel_active()
@@ -360,6 +389,7 @@ class Room:
         self.wake.set()
 
     def control(self, action: str, target: str | None = None) -> None:
+        self.restart_paused = False
         if action == "reset-session":
             names = [a.name for a in self.config.agents]
             if target is not None and target not in names:
@@ -617,9 +647,12 @@ class Room:
             self.wake.clear()
             if self.closed:
                 break
-            if self.manual_paused or not self.messages:
+            if self.paused_by_human() or not self.messages:
                 continue
+            # A restart pause reaches here so a due reset can lift it unattended.
             self.retry_due_quotas()
+            if self.manual_paused:
+                continue
             recovering = bool(self.quotas)
             if not recovering and not self.ensure_consensus_documents():
                 self.state()
@@ -680,6 +713,8 @@ class Room:
                 self.state()
                 continue
             revision = self.revision
+            if self.reason == "recovering":
+                self.reason = "running"
             self.active = {
                 "speaker": name,
                 "turn_id": turn_id,

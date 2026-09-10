@@ -112,6 +112,8 @@ class ChatRoom(Room):
 
     def refresh_active(self):
         self.active = next((m.active.public() for m in self.members.values() if m.active), None)
+        if self.active and self.reason == "recovering":
+            self.reason = "running"
 
     def failed_members(self):
         return [name for name, member in self.members.items() if member.error is not None]
@@ -134,6 +136,7 @@ class ChatRoom(Room):
     def say(self, speaker, text):
         if not isinstance(text, str) or not text.strip():
             raise ValueError("Message must be nonempty text")
+        self.restart_paused = False
         if self.reason in {"completed", "blocked"}:
             self.redirect(speaker, text)
             return
@@ -185,6 +188,7 @@ class ChatRoom(Room):
         self.wake.set()
 
     def control(self, action, target=None):
+        self.restart_paused = False
         names = list(self.adapters)
         if target is not None and target not in names:
             raise ValueError(f"Unknown member: {target}")
@@ -267,12 +271,13 @@ class ChatRoom(Room):
             self.manual_paused, self.reason = True, "error"
             return  # Do not finalize consensus or schedule work until an explicit retry.
         if self.quotas:
-            if not self.manual_paused:
+            # A restart pause reaches here so a due reset can lift it unattended.
+            if not self.paused_by_human():
                 self.reason = "quota"
                 self.retry_due_quotas()
                 # Drain every revoked reader/writer/check before probing, then keep
                 # normal discussion fenced until all unavailable members recover.
-                if not self.active:
+                if not self.manual_paused and not self.active:
                     name = next((n for n in self.adapters if n in self.quota_retries), None)
                     if name:
                         self.launch(name, "recovery", "recovery", force=True)

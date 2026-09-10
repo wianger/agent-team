@@ -714,7 +714,26 @@ class QuotaRoomTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(claude.calls), 2)
             await room.close()
 
-    async def test_restart_preserves_provider_deadline_but_requires_explicit_resume(self):
+    async def test_recovering_room_is_distinguishable_from_an_idle_one(self):
+        """Issue #1: between clearing a quota and scheduling a turn, a room reported
+        itself running, unpaused, with nothing active — exactly like an idle team."""
+        for mode in ("chatroom", "serial"):
+            room = self.start(
+                Scripted(QuotaExceeded("Usage exhausted", resets_at=self.now + 300)),
+                Scripted(),
+                mode,
+            )
+            await self.until(lambda room=room: "short" in room.quotas and not room.active)
+            self.assertEqual(room.room_state(), "paused_by_quota")
+            room.quota_succeeded("short")
+            self.assertFalse(room.quotas)
+            status = room.status()
+            self.assertIsNone(status["active"])
+            self.assertEqual(status["room_state"], "running")
+            self.assertEqual(status["reason"], "recovering")
+            await room.close()
+
+    async def test_restart_preserves_provider_deadline_and_recovers_unattended(self):
         for mode in ("chatroom", "serial"):
             room = self.start(
                 Scripted(QuotaExceeded("Usage exhausted", resets_at=self.now + 300)),
@@ -728,16 +747,20 @@ class QuotaRoomTests(unittest.IsolatedAsyncioTestCase):
             recovered = self.start(claude, Scripted(), mode, store=room.store)
             self.assertEqual(recovered.quotas["short"], saved)
             self.assertTrue(recovered.manual_paused)
-            self.now = saved["retry_at"] + 1
+            self.assertEqual(recovered.room_state(), "paused_by_quota")
+            # Before the provider's reset the restarted room stays put.
             recovered.wake.set()
             await asyncio.sleep(0.02)
             self.assertFalse(claude.calls)
-            self.assertIsNone(recovered.quota_timer)
-            recovered.control("resume")
+            # After it, the room recovers with nobody present to resume it.
+            self.now = saved["retry_at"] + 1
+            recovered.wake.set()
             await self.until(
                 lambda recovered=recovered: not recovered.quotas and not recovered.active
             )
             self.assertEqual(claude.calls[0]["phase"], "recovery")
+            # The restart pause is gone; any later pause is the room's own doing.
+            self.assertFalse(recovered.restart_paused)
             await recovered.close()
             again = self.start(Scripted(), Scripted(), mode, store=room.store)
             self.assertFalse(again.quotas)

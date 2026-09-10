@@ -286,6 +286,10 @@ class RoomView:
             if any(t.get("phase") == "recovery" for t in self.turns.values()):
                 return "Paused · checking quota recovery"
             return "Pausing · stopping active turns" if self.turns else "Paused · usage limit"
+        if reason == "stalled":
+            return "Paused · proposals are not converging"
+        if reason == "recovering":
+            return "Recovering · scheduling the next turn"
         if self.state.get("paused") and reason != "waiting":
             return "Pausing · active turns are finishing" if self.turns else "Paused · " + label
         if not self.messages and not self.state.get("messages"):
@@ -324,6 +328,12 @@ class RoomView:
                 "Team paused by a usage limit. Known reset times trigger recovery checks; "
                 "unknown times require /retry or /resume. /status shows timing. "
                 "Discussion resumes only after all limited members recover."
+            )
+        if reason == "stalled":
+            return (
+                "Members keep replacing each other's proposals instead of agreeing. "
+                "Send guidance to break the tie, then /resume. Raising "
+                "proposal_version_limit only buys more attempts."
             )
         if self.state.get("paused") and reason != "waiting":
             if self.turns:
@@ -910,7 +920,7 @@ class TeamUI:
             or self.model.notice
             or state.get("paused")
             and reason != "waiting"
-            or reason in {"completed", "blocked", "error", "document_error"}
+            or reason in {"completed", "blocked", "error", "document_error", "stalled"}
             or state.get("interaction_mode") == "serial"
             and state.get("messages")
         )

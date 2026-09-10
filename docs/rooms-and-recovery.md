@@ -16,7 +16,7 @@ Failures, quota limits, and interruptions retain known session IDs and the last 
 
 History lives in `<room>/events.sqlite3`. The default room path is relative to the directory where you launch agent-team, while `workspace` is relative to the configuration file. Deleting source files or `team.toml` does not clear the hidden `.agent-team` directory.
 
-Reopening the same room restores history **paused**; use `/resume`. To start fresh without deleting old history, choose an unused path: `agent-team --room .agent-team/new-room`. Changing team members or workspace also requires a new room. `/resume` on an already-running team does not trigger extra calls.
+Reopening the same room restores history **paused**; use `/resume`. The one pause a room lifts by itself is a restart that is still waiting on a provider's quota reset: when that reset time arrives, the room runs its recovery checks and continues with nobody present, so a run can span a reset window overnight. To start fresh without deleting old history, choose an unused path: `agent-team --room .agent-team/new-room`. Changing team members or workspace also requires a new room. `/resume` on an already-running team does not trigger extra calls.
 
 ## Usage limits
 
@@ -24,6 +24,6 @@ Reopening the same room restores history **paused**; use `/resume`. To start fre
 
 Discussion and work resume only after all limited members pass isolated checks. Codex reset metadata is read through its resident app-server; legacy serial Codex requires manual recovery when no timestamp is available. `/status` shows timing and remaining wait.
 
-Manual pauses, other errors, and server restarts require explicit resume. Old fixed-delay deadlines are ignored. Required votes and existing file changes are preserved.
+Manual pauses and other errors require explicit resume. A server restart does too, unless a quota reset falls due first. Old fixed-delay deadlines are ignored. Required votes and existing file changes are preserved.
 
 Why the whole team pauses rather than continuing a member short: [ADR-0003](adr/0003-quota-pauses-the-whole-room.md).

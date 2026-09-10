@@ -128,6 +128,12 @@ The wire-level representation of incremental context — the protocol token and 
 introduces. The transport term for what `incremental` names as a setting.
 _Avoid_: Diff, patch, update
 
+**Room state**:
+Where a room is in its life: waiting for an idea, running, paused by a human, paused by a quota
+limit, paused for input it cannot proceed without, or completed. One name for the whole room, not
+a property of a member or a turn. A room is paused in every state but running.
+_Avoid_: Status, mode, phase
+
 **Quota limit**:
 A provider refusing further work for an agent until a reset time. Pauses the entire room, not just
 that member.
