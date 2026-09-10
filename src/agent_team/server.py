@@ -38,32 +38,32 @@ class Server:
         self.handlers: set[asyncio.Task] = set()
         self.stopping = False
         self.listener: asyncio.Server | None = None
-        self.lease = None
-        self.workspace_lease = None
+        self.room_lock = None
+        self.workspace_lock = None
         self.store: Store | None = None
         self.room: Room | None = None
 
     async def start(self) -> None:
         self.session.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.lease = os.fdopen(
+        self.room_lock = os.fdopen(
             os.open(self.session / "room.lock", os.O_CREAT | os.O_RDWR, 0o600), "w"
         )
         try:
-            fcntl.flock(self.lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(self.room_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            self.lease.close()
-            self.lease = None
+            self.room_lock.close()
+            self.room_lock = None
             raise ValueError("This session is already running; use agent-team join") from exc
         try:
             if self.config.workflow == "build":
                 lock_dir = self.config.workspace / ".agent-team"
                 lock_dir.mkdir(mode=0o700, exist_ok=True)
-                self.workspace_lease = os.fdopen(
+                self.workspace_lock = os.fdopen(
                     os.open(lock_dir / "workspace.lock", os.O_CREAT | os.O_RDWR, 0o600),
                     "w",
                 )
                 try:
-                    fcntl.flock(self.workspace_lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(self.workspace_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError as exc:
                     raise ValueError(
                         "This workspace already has a team; join it or use another workspace"
@@ -216,13 +216,13 @@ class Server:
         if self.store:
             self.store.close()
             self.store = None
-        if self.lease:
+        if self.room_lock:
             (self.session / "connection.json").unlink(missing_ok=True)
-            self.lease.close()
-            self.lease = None
-        if self.workspace_lease:
-            self.workspace_lease.close()
-            self.workspace_lease = None
+            self.room_lock.close()
+            self.room_lock = None
+        if self.workspace_lock:
+            self.workspace_lock.close()
+            self.workspace_lock = None
 
 
 async def connect(session: Path, name: str) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
