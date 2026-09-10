@@ -33,7 +33,7 @@ QUOTA_PROBE_PROMPT = (
 
 
 class Room:
-    """Single-event-loop coordinator. Only this owner can commit an agent turn."""
+    """Single-event-loop coordinator. Only this owner can commit a member turn."""
 
     def __init__(
         self,
@@ -382,7 +382,7 @@ class Room:
                 raise ValueError("Send an idea first")
             if action == "next" and self.active is not None:
                 raise ValueError(
-                    "An agent has the floor; /interrupt and wait for release before /next"
+                    "A member has the floor; /interrupt and wait for release before /next"
                 )
             if self.workflow and self.workflow.phase == "completed":
                 raise ValueError("Idea completed; send a new idea or revision to collaborate again")

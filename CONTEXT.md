@@ -50,8 +50,8 @@ hold the floor and must not write.
 _Avoid_: Floor, workspace lock, write lock
 
 **Workspace lock**:
-An `flock` on `.agent-team/workspace.lock` preventing two teams from running against one workspace
-across processes. A process-level guard, unrelated to the write lease.
+A guard preventing two teams from running against one workspace at the same time. Held for the
+lifetime of a team, across processes, and unrelated to the write lease.
 _Avoid_: Workspace lease, write lease
 
 ### Agreeing on work
@@ -61,8 +61,8 @@ A document under consideration: summary, milestones, acceptance criteria, and ac
 _Avoid_: Plan, spec, agreement
 
 **Consensus**:
-The state in which every member has approved the same proposal version. Recorded to
-`docs/agent-team/<room-id>/consensus-vNNNN.md` before implementation begins.
+The state in which every member has approved the same proposal version. Recorded as a versioned
+document before implementation begins.
 _Avoid_: Agreement, approval, sign-off
 
 **Milestone**:
@@ -96,8 +96,8 @@ _Avoid_: Test, verification, validation
 ### Context and recovery
 
 **Event log**:
-The append-only SQLite history at `<room>/events.sqlite3`. Authoritative: any disagreement between
-it and a backend session is resolved in its favour.
+The append-only, ordered history of everything that happened in a room. Authoritative: any
+disagreement between it and a backend session is resolved in its favour.
 _Avoid_: Store, database, history file
 
 **Backend session**:
@@ -107,8 +107,8 @@ losing one costs a rebuild, not correctness.
 _Avoid_: Session (unqualified), context, thread
 
 **Incremental context**:
-Sending a member only the messages it has not seen, rather than the whole transcript
-(`context_mode = "incremental"`, versus `"full"`). Carried on the wire by the delta marker.
+Sending a member only the messages it has not seen, rather than the whole transcript. The
+alternative is full context, which resends everything.
 _Avoid_: Session mode, missing messages, catch-up
 
 **Delta**:
