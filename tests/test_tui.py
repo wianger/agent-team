@@ -447,7 +447,7 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
         self.output = ScreenOutput()
         self.ui = TeamUI(
             "user",
-            session=Path("/example/.agent-team/default"),
+            room_path=Path("/example/.agent-team/default"),
             input=self.pipe,
             output=self.output,
         )

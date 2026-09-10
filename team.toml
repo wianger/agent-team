@@ -2,7 +2,7 @@
 [team]
 workspace = "."
 workflow = "build"
-context_mode = "session"
+context_mode = "incremental"
 # Independent resident agents think concurrently and publish without round-robin turns.
 interaction_mode = "chatroom"
 # Every phase: Codex full access; Claude auto approval with all built-in tools.

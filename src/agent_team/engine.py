@@ -647,7 +647,7 @@ class Room:
             through = self.messages[-1]["id"]
             session_plan = None
             if not accepting and not recovering:
-                if self.config.context_mode == "session" and getattr(
+                if self.config.context_mode == "incremental" and getattr(
                     self.adapters[name], "supports_sessions", False
                 ):
                     session_plan = self.sessions.plan(

@@ -31,8 +31,8 @@ async def receive(reader: asyncio.StreamReader) -> dict:
 
 
 class Server:
-    def __init__(self, config: TeamConfig, session: Path) -> None:
-        self.config, self.session = config, session.resolve()
+    def __init__(self, config: TeamConfig, room_path: Path) -> None:
+        self.config, self.room_path = config, room_path.resolve()
         self.token = secrets.token_urlsafe(32)
         self.clients: dict[str, tuple[asyncio.Queue, asyncio.StreamWriter]] = {}
         self.handlers: set[asyncio.Task] = set()
@@ -44,9 +44,9 @@ class Server:
         self.room: Room | None = None
 
     async def start(self) -> None:
-        self.session.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.room_path.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.room_lock = os.fdopen(
-            os.open(self.session / "room.lock", os.O_CREAT | os.O_RDWR, 0o600), "w"
+            os.open(self.room_path / "room.lock", os.O_CREAT | os.O_RDWR, 0o600), "w"
         )
         try:
             fcntl.flock(self.room_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -68,7 +68,7 @@ class Server:
                     raise ValueError(
                         "This workspace already has a team; join it or use another workspace"
                     ) from exc
-            self.store = Store(self.session / "events.sqlite3")
+            self.store = Store(self.room_path / "events.sqlite3")
             room_type = ChatRoom if self.config.interaction_mode == "chatroom" else Room
             self.room = room_type(self.config, self.store, self.broadcast)
             self.listener = await asyncio.start_server(self.handle, "127.0.0.1", 0)
@@ -79,12 +79,12 @@ class Server:
                 "pid": os.getpid(),
                 "protocol": 1,
             }
-            with tempfile.NamedTemporaryFile("w", dir=self.session, delete=False) as handle:
+            with tempfile.NamedTemporaryFile("w", dir=self.room_path, delete=False) as handle:
                 temp_path = Path(handle.name)
                 json.dump(info, handle)
             try:
                 # Startup has no active clients; keep publication atomic with the lease.
-                temp_path.replace(self.session / "connection.json")  # noqa: ASYNC240
+                temp_path.replace(self.room_path / "connection.json")  # noqa: ASYNC240
             finally:
                 temp_path.unlink(missing_ok=True)  # noqa: ASYNC240
             self.room.start()
@@ -217,7 +217,7 @@ class Server:
             self.store.close()
             self.store = None
         if self.room_lock:
-            (self.session / "connection.json").unlink(missing_ok=True)
+            (self.room_path / "connection.json").unlink(missing_ok=True)
             self.room_lock.close()
             self.room_lock = None
         if self.workspace_lock:
@@ -225,9 +225,9 @@ class Server:
             self.workspace_lock = None
 
 
-async def connect(session: Path, name: str) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+async def connect(room_path: Path, name: str) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     try:
-        info = json.loads((session / "connection.json").read_text())
+        info = json.loads((room_path / "connection.json").read_text())
     except FileNotFoundError as exc:
         raise ValueError("Session is not running; use agent-team start or serve first") from exc
     if info.get("host") != "127.0.0.1" or info.get("protocol") != 1:

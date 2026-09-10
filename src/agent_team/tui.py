@@ -650,9 +650,9 @@ class TranscriptWindow(Window):
 class TeamUI:
     """Testable terminal layout, input routing, and stable scrollback snapshots."""
 
-    def __init__(self, name, *, session: Path | None = None, stop_on_exit=False, **app_options):
+    def __init__(self, name, *, room_path: Path | None = None, stop_on_exit=False, **app_options):
         self.model = RoomView(name)
-        self.session = session
+        self.room_path = room_path
         self.stop_on_exit = stop_on_exit
         self.connected = True
         self.confirm_leave: str | None = None
@@ -854,10 +854,10 @@ class TeamUI:
 
     def room_label(self):
         label = "Shared conversation"
-        if self.session:
-            label = self.session.name
-            if self.session.parent.name == ".agent-team":
-                label = f"{self.session.parent.parent.name} / {self.session.name}"
+        if self.room_path:
+            label = self.room_path.name
+            if self.room_path.parent.name == ".agent-team":
+                label = f"{self.room_path.parent.parent.name} / {self.room_path.name}"
         return clean(label)
 
     def title(self):
@@ -1049,8 +1049,8 @@ class TeamUI:
         if key == self.painted or (not self.follow and self.painted is not None):
             return
         page = self.model.page(self.view, room_label=self.room_label())
-        if self.session and self.view in {"help", "status"}:
-            page.text += "\n  Session: " + clean(str(self.session)) + "\n"
+        if self.room_path and self.view in {"help", "status"}:
+            page.text += "\n  Room: " + clean(str(self.room_path)) + "\n"
         position = (
             len(page.text)
             if self.view == "conversation" and (self.model.messages or self.model.replies.turns)

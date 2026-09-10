@@ -305,7 +305,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         writer.write(encode({"type": "sessions"}))
         await writer.drain()
         event = await self.until(reader, lambda e: e["type"] == "session.state")
-        self.assertEqual(event["context_mode"], "session")
+        self.assertEqual(event["context_mode"], "incremental")
         self.assertEqual(event["sessions"], {})
         writer.write(encode({"type": "control", "action": "reset-session"}))
         await writer.drain()

@@ -23,16 +23,16 @@ def parser() -> argparse.ArgumentParser:
         description="A shared team room for humans, Claude Code, and Codex. "
         "Run without a command to initialize and start an interactive team.",
         epilog="Startup options can omit 'start': agent-team --config team.toml "
-        "--session .agent-team/default --name user. See 'agent-team start --help' for options.",
+        "--room .agent-team/default --name user. See 'agent-team start --help' for options.",
     )
     root.add_argument("--version", action="version", version="agent-team 0.1.0")
     commands = root.add_subparsers(dest="command", required=True)
     init = commands.add_parser("init", help="Create a team.toml configuration")
     init.add_argument("--config", type=Path, default=Path("team.toml"))
     for name, description in (
-        ("start", "Start a session server and join the conversation"),
-        ("serve", "Run the session server independently of human connections"),
-        ("join", "Join a session from another terminal"),
+        ("start", "Start a room server and join the conversation"),
+        ("serve", "Run the room server independently of human connections"),
+        ("join", "Join a room from another terminal"),
         ("demo", "Run an interactive demo without accounts"),
         ("history", "Read or export the public history offline"),
         ("doctor", "Check configuration and CLI installations"),
@@ -47,7 +47,7 @@ def parser() -> argparse.ArgumentParser:
                 "team.toml if missing",
             )
         if name not in {"doctor", "demo"}:
-            command.add_argument("--session", type=Path, default=Path(".agent-team/default"))
+            command.add_argument("--room", type=Path, default=Path(".agent-team/default"))
         if name in {"start", "join", "demo"}:
             command.add_argument("--name", default="user")
             command.add_argument(
@@ -107,7 +107,7 @@ def load_team_config(path: Path, *, initialize=False):
 
 async def run(args: argparse.Namespace) -> None:
     if args.command == "join":
-        await chat(args.session.resolve(), args.name, args.plain)
+        await chat(args.room.resolve(), args.name, args.plain)
         return
     if args.command == "doctor":
         config = load_team_config(args.config)
@@ -141,14 +141,14 @@ async def run(args: argparse.Namespace) -> None:
     with context as temp:
         if temp:
             config = replace(config, workspace=Path(temp))
-        session = Path(temp) if temp else args.session.resolve()
-        server = Server(config, session)
+        room_path = Path(temp) if temp else args.room.resolve()
+        server = Server(config, room_path)
         await server.start()
         try:
             if args.command == "serve":
                 print(
-                    f"Session started: {session}\n"
-                    f"In another terminal, run: agent-team join --session {session}\n"
+                    f"Room started: {room_path}\n"
+                    f"In another terminal, run: agent-team join --room {room_path}\n"
                     "The team keeps running when all humans disconnect. "
                     "Stop this server with Ctrl-C.",
                     flush=True,
@@ -167,7 +167,7 @@ async def run(args: argparse.Namespace) -> None:
                 loop = asyncio.get_running_loop()
                 loop.add_signal_handler(signal.SIGTERM, stopped.set)
                 client_task = asyncio.create_task(
-                    chat(session, args.name, args.plain, stop_on_exit=True)
+                    chat(room_path, args.name, args.plain, stop_on_exit=True)
                 )
                 stop_task = asyncio.create_task(stopped.wait())
                 try:
@@ -192,7 +192,7 @@ def main() -> None:
             create_config(args.config)
             print(f"Created {args.config}. Run agent-team doctor, then agent-team.")
         elif args.command == "history":
-            events = read_events(args.session / "events.sqlite3")
+            events = read_events(args.room / "events.sqlite3")
             for event in events:
                 if args.json:
                     print(json.dumps(event, ensure_ascii=False))

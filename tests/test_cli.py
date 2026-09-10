@@ -28,7 +28,7 @@ class ArgumentTests(unittest.TestCase):
         arguments = [
             "--config",
             "project settings.toml",
-            "--session",
+            "--room",
             "join",
             "--name",
             "observer",
@@ -37,7 +37,7 @@ class ArgumentTests(unittest.TestCase):
         original = arguments.copy()
         self.assertEqual(parse_args(arguments), parse_args(["start", *arguments]))
         self.assertEqual(arguments, original)
-        self.assertEqual(parse_args(arguments).session, Path("join"))
+        self.assertEqual(parse_args(arguments).room, Path("join"))
 
     def test_existing_subcommands_keep_their_meaning(self):
         for command in ("init", "start", "serve", "join", "demo", "doctor", "history"):
@@ -307,7 +307,7 @@ class CLISmokeTests(unittest.IsolatedAsyncioTestCase):
                     "--plain",
                     "--config",
                     str(config_path),
-                    "--session",
+                    "--room",
                     str(session),
                     "--name",
                     "observer",
@@ -398,7 +398,7 @@ class CLISmokeTests(unittest.IsolatedAsyncioTestCase):
                 "serve",
                 "--config",
                 str(config_path),
-                "--session",
+                "--room",
                 str(session),
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
@@ -413,7 +413,7 @@ class CLISmokeTests(unittest.IsolatedAsyncioTestCase):
                     "agent_team",
                     "join",
                     "--plain",
-                    "--session",
+                    "--room",
                     str(session),
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
@@ -424,7 +424,7 @@ class CLISmokeTests(unittest.IsolatedAsyncioTestCase):
 
             try:
                 async with asyncio.timeout(10):
-                    self.assertIn(b"Session started:", await server.stdout.readline())
+                    self.assertIn(b"Room started:", await server.stdout.readline())
                     client = await join()
                     self.assertEqual(json.loads(await client.stdout.readline())["type"], "welcome")
                     client.stdin.write(b"Continue without observers\n")
@@ -534,7 +534,7 @@ class CLISmokeTests(unittest.IsolatedAsyncioTestCase):
                 "--plain",
                 "--config",
                 str(config_path),
-                "--session",
+                "--room",
                 str(session),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,

@@ -520,7 +520,7 @@ class SessionProtocolTests(unittest.TestCase):
         )
         display = describe_sessions(
             {
-                "context_mode": "session",
+                "context_mode": "incremental",
                 "agents": [{"name": "a", "backend": "codex"}],
                 "sessions": {"a": {"session_id": "example", "synced_through": 12, "dirty": True}},
             }

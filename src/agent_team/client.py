@@ -213,19 +213,19 @@ async def plain_chat(
 
 
 async def chat(
-    session: Path, name: str, plain: bool = False, *, stop_on_exit: bool = False
+    room_path: Path, name: str, plain: bool = False, *, stop_on_exit: bool = False
 ) -> None:
-    reader, writer = await connect(session, name)
+    reader, writer = await connect(room_path, name)
     try:
         hello = await receive(reader)
         if hello.get("type") != "welcome":
-            raise ValueError(hello.get("text", "Failed to join the session"))
+            raise ValueError(hello.get("text", "Failed to join the room"))
         if plain or not sys.stdin.isatty() or not sys.stdout.isatty():
             await plain_chat(reader, writer, hello)
         else:
             from .tui import TeamUI
 
-            await TeamUI(name, session=session, stop_on_exit=stop_on_exit).run(
+            await TeamUI(name, room_path=room_path, stop_on_exit=stop_on_exit).run(
                 reader, writer, hello
             )
     finally:

@@ -166,9 +166,9 @@ Custom backends receive `AGENT_TEAM_PHASE=judging` for peer inspection, distinct
 
 ## Private-session synchronization
 
-The default `context_mode = "session"` is supported by Codex and Claude adapters. Chatroom Codex uses resident `app-server` JSONL RPC (`initialize`, `thread/start` or `thread/resume`, `turn/start`, and streamed notifications). Claude uses resident `--input-format stream-json --output-format stream-json`, an initialized control channel, and successful `result` boundaries. The process does not exit to delimit a turn. Unexpected transport closure invalidates the invocation. Custom command and mock backends remain stateless. `context_mode = "full"` uses fresh nonpersistent conversations; Codex retains the server with a fresh thread, while Claude restarts its process.
+The default `context_mode = "incremental"` is supported by Codex and Claude adapters. Chatroom Codex uses resident `app-server` JSONL RPC (`initialize`, `thread/start` or `thread/resume`, `turn/start`, and streamed notifications). Claude uses resident `--input-format stream-json --output-format stream-json`, an initialized control channel, and successful `result` boundaries. The process does not exit to delimit a turn. Unexpected transport closure invalidates the invocation. Custom command and mock backends remain stateless. `context_mode = "full"` uses fresh nonpersistent conversations; Codex retains the server with a fresh thread, while Claude restarts its process.
 
-A session-mode prompt includes a synchronization envelope:
+An incremental-mode prompt includes a synchronization envelope:
 
 ```json
 {"mode":"incremental","after":120,"through":145,"message_count":3}

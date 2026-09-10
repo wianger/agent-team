@@ -82,7 +82,7 @@ class SessionRecoveryTests(unittest.IsolatedAsyncioTestCase):
             workspace=Path(self.temp.name),
             workflow="discussion",
             interaction_mode=mode,
-            context_mode="session",
+            context_mode="incremental",
             permission_mode="full_auto",
             turn_delay=0,
             agents=(AgentConfig("a", "claude"), AgentConfig("b", "codex")),

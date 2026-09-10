@@ -44,7 +44,7 @@ class TeamConfig:
     agents: tuple[AgentConfig, ...]
     workspace: Path = field(default_factory=Path.cwd)
     workflow: str = "build"
-    context_mode: str = "session"
+    context_mode: str = "incremental"
     permission_mode: str = "phase_scoped"
     interaction_mode: str = "serial"
     turn_timeout: float = 0
@@ -56,8 +56,8 @@ class TeamConfig:
     def __post_init__(self) -> None:
         if self.workflow not in {"build", "discussion"}:
             raise ValueError("workflow must be build or discussion")
-        if self.context_mode not in {"session", "full"}:
-            raise ValueError("context_mode must be session or full")
+        if self.context_mode not in {"incremental", "full"}:
+            raise ValueError("context_mode must be incremental or full")
         if self.permission_mode not in {"phase_scoped", "full_auto"}:
             raise ValueError("permission_mode must be phase_scoped or full_auto")
         if self.interaction_mode not in {"serial", "chatroom"}:
@@ -122,7 +122,7 @@ DEFAULT_CONFIG = """# Install and sign in to codex and claude before starting.
 [team]
 workspace = "."
 workflow = "build"
-context_mode = "session"
+context_mode = "incremental"
 # Independent resident agents think concurrently and publish without round-robin turns.
 interaction_mode = "chatroom"
 # Every phase: Codex full access; Claude auto approval with all built-in tools.

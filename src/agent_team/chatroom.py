@@ -462,7 +462,7 @@ class ChatRoom(Room):
         adapter = self.adapters.get(name)
         if (
             adapter
-            and self.config.context_mode == "session"
+            and self.config.context_mode == "incremental"
             and getattr(adapter, "supports_sessions", False)
         ):
             agent = next(a for a in self.config.agents if a.name == name)

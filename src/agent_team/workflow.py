@@ -147,7 +147,7 @@ class Workflow:
         if self.data["members"] != self.members or self.data["workspace"] != str(
             config.workspace.resolve()
         ):
-            raise ValueError("Session members or workspace changed; use a new --session")
+            raise ValueError("Room members or workspace changed; use a new --room")
         # Additive migration keeps existing transcripts, plans, and artifacts intact.
         self.data.setdefault("checkpoint", None)
         self.data.setdefault("next_writer", None)
