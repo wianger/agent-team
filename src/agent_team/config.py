@@ -52,6 +52,7 @@ class TeamConfig:
     acceptance_timeout: float = 0
     idle_warning_seconds: float = 120
     turn_delay: float = 0.8
+    proposal_version_limit: int = 5
 
     def __post_init__(self) -> None:
         if self.workflow not in {"build", "discussion"}:
@@ -76,6 +77,9 @@ class TeamConfig:
             value = getattr(self, key)
             if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
                 raise ValueError(f"{key} must be a finite, nonnegative number of seconds")
+        limit = self.proposal_version_limit
+        if type(limit) is not int or isinstance(limit, bool) or limit < 0:
+            raise ValueError("proposal_version_limit must be a nonnegative whole number")
         if not self.workspace.is_dir():
             raise ValueError(f"workspace does not exist: {self.workspace}")
 
@@ -149,6 +153,8 @@ acceptance_timeout = 0
 # Warn once per idle period without cancelling; 0 disables warnings.
 idle_warning_seconds = 120
 turn_delay = 0.8
+# Pause for a human after this many proposals fail to reach consensus; 0 disables.
+proposal_version_limit = 5
 
 # All members share the same responsibilities. An optional role adds a focus, not a fixed job.
 [[agents]]

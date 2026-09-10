@@ -65,6 +65,18 @@ The state in which every member has approved the same proposal version. Recorded
 document before implementation begins.
 _Avoid_: Agreement, approval, sign-off
 
+**Objection**:
+A member's recorded refusal of the standing proposal, carrying a reason. It revokes every approval
+and is what licenses replacing another member's proposal. Silence is not objection, and an
+objection is not a rejection of the work — it reopens the plan, not a checkpoint.
+_Avoid_: Rejection, veto, disapproval, block
+
+**Proposal version**:
+One numbered draft of a proposal. Every new proposal is a new version, votes are cast against a
+specific version, and a vote for a superseded version is refused rather than counted. The count of
+versions is how a room notices it is not converging.
+_Avoid_: Revision, draft number, iteration
+
 **Milestone**:
 A unit of shared work inside a proposal. Shared, not assigned: an owner is a focus, not a claim,
 and any member may revise any milestone.

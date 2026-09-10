@@ -16,6 +16,8 @@ acceptance_timeout = 0
 # Warn once per idle period without cancelling; 0 disables warnings.
 idle_warning_seconds = 120
 turn_delay = 0.8
+# Pause for a human after this many proposals fail to reach consensus; 0 disables.
+proposal_version_limit = 5
 
 # All members share the same responsibilities. An optional role adds a focus, not a fixed job.
 [[agents]]

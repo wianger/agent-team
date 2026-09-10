@@ -287,9 +287,13 @@ class CollaborationIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_rejection_fix_and_reciprocal_judgment_before_completion(self):
         room = await self.run_fixture(reject_first=True)
         history = room.workflow.data["proposal"]["milestones"][0]["contributions"]
-        self.assertEqual([c["author"] for c in history], ["b", "a"])
+        authors = [c["author"] for c in history]
+        self.assertEqual(len(authors), 2)
         self.assertEqual(history[0]["judgments"][0]["action"], "judge_fail")
-        self.assertEqual(history[1]["judgments"][0]["speaker"], "b")
+        # The critic of the rejected revision takes the next write turn, and its author
+        # judges the result: reciprocal, and independent of who happened to write first.
+        self.assertEqual(history[0]["judgments"][0]["speaker"], authors[1])
+        self.assertEqual(history[1]["judgments"][0]["speaker"], authors[0])
         self.assertEqual(history[1]["judgments"][0]["action"], "judge_pass")
         self.assertEqual(room.workflow.data["acceptance_results"][0]["exit_code"], 0)
         room.say("human", "Now consider a follow-up improvement")

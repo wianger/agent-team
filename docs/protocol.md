@@ -43,14 +43,16 @@ Discussion and eligible formal reviews can run concurrently. Writers/checks wait
 
 Milestones need unique IDs and complete, acyclic dependencies. Plans require at least one milestone, acceptance criterion, and meaningful executable command. Commands must be nonempty argument arrays, not shell strings. The optional legacy `owner` must name a configured member, but neither restricts who may implement nor controls floor scheduling.
 
-A proposal creates a new version and clears previous votes. The proposer must also explicitly approve on a later turn:
+A proposal creates a new version, clears previous votes, and counts as its author's approval. The proposer must also explicitly approve on a later turn:
 
 ```json
 {"action":"approve","version":1}
 {"action":"object","version":1,"reason":"Specific unresolved issue"}
 ```
 
-An objection revokes existing approvals. Only explicit unanimous approval of the same version, without outstanding objections, starts implementation. Plain discussion may omit an action; `[[PASS]]` yields the turn without voting.
+Proposing approves the proposal it creates; every other member still approves explicitly. An objection revokes existing approvals. Only unanimous approval of the same version, without outstanding objections, starts implementation.
+
+A member may replace another member's standing proposal only after objecting to it, so displacing someone else's plan costs a recorded reason; an author may always refine its own. Once `proposal_version_limit` proposals (default 5) have failed to reach consensus, the room pauses for a human instead of proposing again. Plain discussion may omit an action; `[[PASS]]` yields the turn without voting.
 
 ## Versioned consensus documents and revision
 

@@ -11,6 +11,7 @@ Edit [team.toml](../team.toml) for settings. `workflow = "build"` requires at le
 | `permission_mode` | `"full_auto"` or `"phase_scoped"`; see below |
 | `turn_timeout`, `work_timeout`, `acceptance_timeout` | Opt-in deadlines in seconds; `0` disables them |
 | `idle_warning_seconds`, `turn_delay` | Inactivity notice interval and per-member delay; defaults are 120 and 0.8 seconds |
+| `proposal_version_limit` | Pause for a human after this many proposals fail to reach consensus; default 5, `0` disables |
 
 Generated configuration selects `chatroom` and `full_auto`; older configurations omitting those keys retain `serial` and `phase_scoped`.
 

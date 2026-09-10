@@ -98,25 +98,56 @@ class WorkflowTests(unittest.TestCase):
                 },
             )
 
-    def test_requires_explicit_unanimous_approval_of_same_version(self):
+    def test_proposing_approves_it_and_every_other_member_must_approve_explicitly(self):
         self.flow.apply("a", plan())
-        self.assertEqual(self.flow.data["approvals"], [])
+        self.assertEqual(self.flow.data["approvals"], ["a"])
         self.flow.apply("a", None)
-        self.flow.apply("b", {"action": "approve", "version": 1})
         self.assertEqual(self.flow.phase, "discussion")
-        self.flow.apply("a", {"action": "approve", "version": 1})
+        self.flow.apply("b", {"action": "approve", "version": 1})
         self.assertEqual(self.flow.phase, "implementation")
 
     def test_new_proposal_invalidates_votes_and_rejects_stale_vote(self):
         self.flow.apply("a", plan())
-        self.flow.apply("a", {"action": "approve", "version": 1})
+        self.flow.apply("b", {"action": "object", "version": 1, "reason": "Needs a rethink"})
         self.flow.apply("b", plan())
         self.assertEqual(self.flow.data["version"], 2)
-        self.assertEqual(self.flow.data["approvals"], [])
+        self.assertEqual(self.flow.data["approvals"], ["b"])
         before = self.flow.snapshot()
         with self.assertRaises(ValueError):
-            self.flow.apply("b", {"action": "approve", "version": 1})
+            self.flow.apply("a", {"action": "approve", "version": 1})
         self.assertEqual(self.flow.snapshot(), before)
+
+    def test_replacing_an_unopposed_proposal_requires_an_objection_first(self):
+        self.flow.apply("a", plan())
+        before = self.flow.snapshot()
+        with self.assertRaises(ValueError):
+            self.flow.apply("b", plan())
+        self.assertEqual(self.flow.snapshot(), before)
+        self.flow.apply("b", {"action": "object", "version": 1, "reason": "Wrong approach"})
+        self.flow.apply("b", plan())
+        self.assertEqual(self.flow.data["version"], 2)
+
+    def test_an_author_may_refine_its_own_standing_proposal_without_objecting(self):
+        self.flow.apply("a", plan())
+        self.flow.apply("a", plan())
+        self.assertEqual(self.flow.data["version"], 2)
+        self.assertEqual(self.flow.data["approvals"], ["a"])
+
+    def test_proposals_past_the_version_limit_stall_for_a_human(self):
+        limit = self.flow.config.proposal_version_limit
+        speakers = ("a", "b")
+        note = ""
+        for version in range(1, limit + 2):
+            speaker = speakers[version % 2]
+            if self.flow.data["proposal"] and self.flow.data["proposer"] != speaker:
+                self.flow.apply(
+                    speaker,
+                    {"action": "object", "version": version - 1, "reason": "Still not right"},
+                )
+            note = self.flow.apply(speaker, plan())
+        self.assertEqual(self.flow.data["version"], limit + 1)
+        self.assertTrue(note.startswith("stalled:"), note)
+        self.assertEqual(self.flow.phase, "discussion")
 
     def test_objection_revokes_all_votes_and_must_be_resolved(self):
         self.flow.apply("a", plan())
@@ -272,7 +303,7 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         stages = [e["phase"] for e in events if e["type"] == "floor.granted"]
         self.assertEqual(
             stages,
-            ["discussion"] * 3
+            ["discussion"] * 2
             + ["implementation", "judging"] * 2
             + ["review"] * 2
             + ["acceptance"],
@@ -325,7 +356,8 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.room.start()
         self.room.control("pause")
         self.room.say("human", "Build")
-        for _ in range(3):
+        # Proposing now approves, so consensus lands one turn earlier than it used to.
+        for _ in range(2):
             self.room.control("next")
             await self.wait_until(lambda: self.room.manual_paused and self.room.active is None)
         self.assertEqual(self.room.workflow.phase, "implementation")

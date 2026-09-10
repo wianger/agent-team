@@ -136,6 +136,7 @@ class Workflow:
                 "phase": "discussion",
                 "version": 0,
                 "proposal": None,
+                "proposer": None,
                 "approvals": [],
                 "objections": {},
                 "review_approvals": [],
@@ -193,6 +194,7 @@ class Workflow:
         self.data.update(
             phase="discussion",
             proposal=None,
+            proposer=None,
             approvals=[],
             objections={},
             review_approvals=[],
@@ -201,6 +203,9 @@ class Workflow:
             next_writer=None,
             feedback=[],
         )
+
+    def consensus_reached(self) -> bool:
+        return set(self.data["approvals"]) == set(self.members) and not self.data["objections"]
 
     def confirm_consensus(self, *, recovered: bool = False) -> dict:
         """Called by the coordinator after all relevant discussion has finished."""
@@ -295,11 +300,24 @@ class Workflow:
         if kind == "blocked":
             return "blocked: " + nonempty(action.get("reason"), "reason")
         if self.phase == "discussion" and kind == "propose":
+            # Replacing someone else's standing proposal wipes their approvals, so it must
+            # cost the replacer a recorded reason. Refining your own draft stays free.
+            if (
+                self.data["proposal"]
+                and not self.data["objections"]
+                and self.data.get("proposer") != speaker
+            ):
+                raise ValueError(
+                    f"Proposal v{self.data['version']} stands unopposed; object with a "
+                    "reason before proposing a replacement"
+                )
             proposal = validate_plan(action, self.members)
             self.data.update(
                 proposal=proposal,
+                proposer=speaker,
                 version=self.data["version"] + 1,
-                approvals=[],
+                # Authoring a proposal is approving it; a separate vote only costs a turn.
+                approvals=[speaker],
                 objections={},
                 review_approvals=[],
                 acceptance_results=[],
@@ -307,7 +325,18 @@ class Workflow:
                 next_writer=None,
                 feedback=[],
             )
-            return f"Proposal v{self.data['version']} awaits explicit approval from every member."
+            version = self.data["version"]
+            limit = self.config.proposal_version_limit
+            if limit and version > limit:
+                return (
+                    f"stalled: proposal v{version} passed proposal_version_limit={limit} "
+                    "without consensus. Members are replacing each other's proposals "
+                    "instead of converging; a human must steer."
+                )
+            if self.consensus_reached():
+                self.data["phase"] = "implementation"
+                return "Consensus reached. Begin shared implementation with peer judgment."
+            return f"Proposal v{version} awaits explicit approval from every other member."
         if type(action.get("version")) is not int or action["version"] != self.data["version"]:
             raise ValueError("Action references a stale or missing proposal version")
         if kind == "request_revision":
@@ -331,7 +360,7 @@ class Workflow:
             self.data["objections"].pop(speaker, None)
             if speaker not in self.data["approvals"]:
                 self.data["approvals"].append(speaker)
-            if set(self.data["approvals"]) == set(self.members) and not self.data["objections"]:
+            if self.consensus_reached():
                 self.data["phase"] = "implementation"
                 return "Consensus reached. Begin shared implementation with peer judgment."
             return f"{speaker} approves proposal v{self.data['version']}."

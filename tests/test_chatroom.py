@@ -466,9 +466,8 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
         )
         room.workflow.apply("a", proposal)
         room.publish_system("A proposed the fixture plan")
-        await self.until(
-            lambda: "a" in room.workflow.data["approvals"] and not room.members["a"].active
-        )
+        # Proposing already approves, so wait on a's scripted turn rather than its vote.
+        await self.until(lambda: a.calls and not room.members["a"].active)
         room.say("human", "Check another edge case before confirming consensus")
         await self.until(lambda: len(a.calls) == 2 and b.calls)
         approval_gate.set()

@@ -569,6 +569,8 @@ class Room:
             self.workflow = candidate
             if note.startswith("blocked:"):
                 self.manual_paused, self.reason = True, "blocked"
+            if note.startswith("stalled:"):
+                self.manual_paused, self.reason = True, "stalled"
             if note:
                 self.emit(
                     "workflow.changed", durable=False, text=note, workflow=candidate.snapshot()

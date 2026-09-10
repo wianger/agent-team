@@ -554,7 +554,9 @@ class QuotaRoomTests(unittest.IsolatedAsyncioTestCase):
         room = self.start(Writer(), codex, build=True, start=False)
         room.workflow.apply("long", shared_plan())
         for name in room.adapters:
-            room.workflow.apply(name, {"action": "approve", "version": 1})
+            # "long" approved by proposing; approving twice would land after consensus.
+            if name not in room.workflow.data["approvals"]:
+                room.workflow.apply(name, {"action": "approve", "version": 1})
         room.workflow.confirm_consensus()
         room.workflow.data["next_writer"] = "short"
         room.start()
@@ -792,7 +794,8 @@ class QuotaRoomTests(unittest.IsolatedAsyncioTestCase):
             room.start()
             room.control("retry", "short")
             await self.until(lambda room=room: "short" not in room.quotas and not room.active)
-            self.assertEqual(room.workflow.data["approvals"], [])
+            # "long" approved by proposing; the probe reply must not have added "short".
+            self.assertEqual(room.workflow.data["approvals"], ["long"])
             self.assertNotIn("Untrusted probe reply", [m["text"] for m in room.messages])
             self.assertFalse(room.adapters["long"].calls)
             await room.close()

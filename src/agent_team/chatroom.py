@@ -642,6 +642,8 @@ class ChatRoom(Room):
             self.cancel_active(exclude=turn.turn_id)
         if note.startswith("blocked:"):
             self.manual_paused, self.reason = True, "blocked"
+        if note.startswith("stalled:"):
+            self.manual_paused, self.reason = True, "stalled"
         if note or rejected:
             self.emit(
                 "workflow.changed",
