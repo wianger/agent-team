@@ -148,6 +148,12 @@ class Workflow:
             config.workspace.resolve()
         ):
             raise ValueError("Room members or workspace changed; use a new --room")
+        if saved and ("checks_result" in self.data or "tasks" in (self.data["proposal"] or {})):
+            raise ValueError(
+                "This room was recorded before 0.2.0 renamed the workflow schema "
+                "(tasks are now milestones, checks are now acceptance_checks). "
+                "Read it with agent-team history, and start new work with a new --room."
+            )
         # Additive migration keeps existing transcripts, plans, and artifacts intact.
         self.data.setdefault("checkpoint", None)
         self.data.setdefault("next_writer", None)

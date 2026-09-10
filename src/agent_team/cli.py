@@ -25,7 +25,7 @@ def parser() -> argparse.ArgumentParser:
         epilog="Startup options can omit 'start': agent-team --config team.toml "
         "--room .agent-team/default --name user. See 'agent-team start --help' for options.",
     )
-    root.add_argument("--version", action="version", version="agent-team 0.1.0")
+    root.add_argument("--version", action="version", version="agent-team 0.2.0")
     commands = root.add_subparsers(dest="command", required=True)
     init = commands.add_parser("init", help="Create a team.toml configuration")
     init.add_argument("--config", type=Path, default=Path("team.toml"))
@@ -48,6 +48,9 @@ def parser() -> argparse.ArgumentParser:
             )
         if name not in {"doctor", "demo"}:
             command.add_argument("--room", type=Path, default=Path(".agent-team/default"))
+            # Renamed in 0.2.0; accepted only to fail with the new name rather than
+            # argparse's bare "unrecognized arguments".
+            command.add_argument("--session", type=Path, help=argparse.SUPPRESS)
         if name in {"start", "join", "demo"}:
             command.add_argument("--name", default="user")
             command.add_argument(
@@ -106,6 +109,8 @@ def load_team_config(path: Path, *, initialize=False):
 
 
 async def run(args: argparse.Namespace) -> None:
+    if getattr(args, "session", None) is not None:
+        raise ValueError("Renamed in 0.2.0: --session is now --room")
     if args.command == "join":
         await chat(args.room.resolve(), args.name, args.plain)
         return

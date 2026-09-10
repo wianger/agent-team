@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-team"
-version = "0.1.0"
+version = "0.2.0"
 description = "A shared conversation room for humans, Claude Code, and Codex"
 readme = "README.md"
 requires-python = ">=3.11"

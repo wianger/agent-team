@@ -80,6 +80,9 @@ class TeamConfig:
             raise ValueError(f"workspace does not exist: {self.workspace}")
 
 
+RENAMED_KEYS = {"check_timeout": "acceptance_timeout"}
+
+
 def load_config(path: Path) -> TeamConfig:
     with path.open("rb") as handle:
         data = tomllib.load(handle)
@@ -98,6 +101,16 @@ def load_config(path: Path) -> TeamConfig:
                 "Remove obsolete limit settings: "
                 + ", ".join(sorted(obsolete))
                 + ". Conversation rounds, output, and shared context are now uncapped."
+            )
+        stale = {old: RENAMED_KEYS[old] for old in sorted(set(team) & set(RENAMED_KEYS))}
+        if stale:
+            raise ValueError(
+                "Renamed in 0.2.0: "
+                + ", ".join(f"{old} is now {new}" for old, new in stale.items())
+            )
+        if team.get("context_mode") == "session":
+            raise ValueError(
+                'Renamed in 0.2.0: context_mode = "session" is now context_mode = "incremental"'
             )
         workspace = Path(team.pop("workspace", ".")).expanduser()
         if not workspace.is_absolute():

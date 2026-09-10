@@ -13,7 +13,7 @@ from contextlib import chdir, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from agent_team.cli import create_config, load_team_config, main, parse_args
+from agent_team.cli import create_config, load_team_config, main, parse_args, run
 from agent_team.client import LiveReplies, parse_input
 from agent_team.config import DEFAULT_CONFIG, AgentConfig, TeamConfig, demo_config, load_config
 from agent_team.store import read_events
@@ -144,6 +144,21 @@ class ConfigurationTests(unittest.TestCase):
                 path.write_text(f"[team]\n{key} = 8\n")
                 with self.assertRaisesRegex(ValueError, "obsolete limit"):
                     load_config(path)
+
+    def test_renamed_settings_report_their_0_2_0_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "team.toml"
+            path.write_text("[team]\ncheck_timeout = 5\n")
+            with self.assertRaisesRegex(ValueError, "check_timeout is now acceptance_timeout"):
+                load_config(path)
+            path.write_text('[team]\ncontext_mode = "session"\n')
+            with self.assertRaisesRegex(ValueError, 'context_mode = "incremental"'):
+                load_config(path)
+
+    def test_renamed_room_flag_reports_its_replacement(self):
+        arguments = parse_args(["start", "--session", "somewhere"])
+        with self.assertRaisesRegex(ValueError, "--session is now --room"):
+            asyncio.run(run(arguments))
 
     def test_commands(self):
         self.assertEqual(

@@ -201,6 +201,16 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Workflow(self.config, saved)
 
+    def test_pre_0_2_0_rooms_are_refused_with_the_schema_change_named(self):
+        for stale in (
+            lambda saved: saved.update(checks_result=[]),
+            lambda saved: saved.update(proposal={"tasks": []}),
+        ):
+            saved = self.flow.snapshot()
+            stale(saved)
+            with self.assertRaisesRegex(ValueError, "before 0.2.0"):
+                Workflow(self.config, saved)
+
     def test_protocol_is_hidden_and_incomplete_action_is_not_accepted(self):
         text = action_reply("I agree", {"action": "approve", "version": 2})
         self.assertEqual(parse_action(text), ("I agree", {"action": "approve", "version": 2}))
