@@ -748,13 +748,16 @@ class QuotaRoomTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(recovered.quotas["short"], saved)
             self.assertTrue(recovered.manual_paused)
             self.assertEqual(recovered.room_state(), "paused_by_quota")
+            # Reopening must arm the retry itself. Without this the runner waits on an
+            # event nobody sets, and the room never recovers however long you leave it.
+            self.assertIsNotNone(recovered.quota_timer)
             # Before the provider's reset the restarted room stays put.
-            recovered.wake.set()
             await asyncio.sleep(0.02)
             self.assertFalse(claude.calls)
-            # After it, the room recovers with nobody present to resume it.
+            # After it, the room recovers with nobody present to resume it, and with
+            # nobody poking `wake` either: reopening must arm that timer by itself.
             self.now = saved["retry_at"] + 1
-            recovered.wake.set()
+            recovered.schedule_quota_retry()
             await self.until(
                 lambda recovered=recovered: not recovered.quotas and not recovered.active
             )

@@ -277,6 +277,9 @@ class Room:
         self.ensure_consensus_documents()
         self.runner = asyncio.create_task(self.run(), name="room-coordinator")
         self.emit("room.started", recovered=bool(self.messages))
+        # A room restored with a quota whose reset has passed must wake itself. Without
+        # this the runner waits on an event nobody sets, and recovery never happens.
+        self.schedule_quota_retry()
 
     def recover_consensus_records(self) -> None:
         if not self.workflow or self.workflow.data["consensus_history"]:
