@@ -141,7 +141,11 @@ class SessionRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(a.calls[-1]["observed"])
                     self.assertEqual(room.store.sessions()["a"], suspended)
                     gate.set()
-                    await self.until(lambda room=room: not room.quotas and not room.active)
+                    await self.until(
+                        lambda room=room, a=a: (
+                            len(a.calls) > 3 and not room.quotas and not room.active
+                        )
+                    )
                     call = a.calls[3]
                     self.assertEqual(call["session_id"], saved["a"]["session_id"])
                     self.assertIn(DELTA_MARKER, call["prompt"])
@@ -167,7 +171,9 @@ class SessionRecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(saved["session_id"])
             self.assertEqual(saved["synced_through"], 0)
             room.control("resume")
-            await self.until(lambda room=room: not room.quotas and not room.active)
+            await self.until(
+                lambda room=room, a=a: len(a.calls) > 2 and not room.quotas and not room.active
+            )
             self.assertEqual(a.calls[2]["session_id"], saved["session_id"])
             self.assertEqual(room.store.sessions()["a"]["generation"], saved["generation"])
             await room.close()
@@ -185,7 +191,9 @@ class SessionRecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(room.quotas)
             self.assertEqual(room.store.sessions()["a"], suspended)
             room.control("resume")
-            await self.until(lambda room=room: not room.quotas and not room.active)
+            await self.until(
+                lambda room=room, a=a: len(a.calls) > 4 and not room.quotas and not room.active
+            )
             self.assertEqual(a.calls[4]["session_id"], saved["a"]["session_id"])
             await room.close()
 
@@ -207,7 +215,7 @@ class SessionRecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(current["synced_through"], saved[name]["synced_through"])
         room.say("human", "Input after interruption")
         room.control("resume")
-        await self.until(lambda: not room.quotas and not room.active)
+        await self.until(lambda: len(b.calls) > 2 and not room.quotas and not room.active)
         call = b.calls[2]
         self.assertEqual(call["session_id"], saved["b"]["session_id"])
         self.assertIn("Session recovery:", call["prompt"])

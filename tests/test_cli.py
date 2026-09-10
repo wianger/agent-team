@@ -555,8 +555,14 @@ class CLISmokeTests(unittest.IsolatedAsyncioTestCase):
                     _, stderr = await process.communicate()
                     self.assertEqual(process.returncode, 0, stderr.decode())
                     self.assertFalse((session / "connection.json").exists())
-                    with self.assertRaises(ProcessLookupError):
-                        os.kill(child_pid, 0)
+                    # A terminating child stays visible to kill(pid, 0) as a zombie until
+                    # it is reparented and reaped, so wait for the exit rather than racing it.
+                    while True:
+                        try:
+                            os.kill(child_pid, 0)
+                        except ProcessLookupError:
+                            break
+                        await asyncio.sleep(0.01)
             finally:
                 if process.returncode is None:
                     process.kill()

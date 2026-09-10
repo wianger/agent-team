@@ -475,7 +475,9 @@ class QuotaRoomTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(room.status()["paused"])
             self.now += 100
             room.wake.set()
-            await self.until(lambda room=room: not room.quotas and not room.active)
+            await self.until(
+                lambda room=room, codex=codex: codex.calls and not room.quotas and not room.active
+            )
             self.assertEqual(codex.calls[0]["phase"], "recovery")
             self.assertGreater(len(claude.calls), 1)
             self.assertGreater(len(codex.calls), 1)
@@ -500,7 +502,11 @@ class QuotaRoomTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(room.status()["paused"])
             self.assertEqual(len(codex.calls), 1)
             room.control("retry", "short")
-            await self.until(lambda room=room: not room.quotas and not room.active)
+            await self.until(
+                lambda room=room, claude=claude: (
+                    claude.calls and not room.quotas and not room.active
+                )
+            )
             self.assertEqual(claude.calls[0]["phase"], "recovery")
             await room.close()
 
@@ -661,7 +667,11 @@ class QuotaRoomTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(room.quota_timer)
             self.assertEqual(len(claude.calls), 1)
             room.control("resume")
-            await self.until(lambda room=room: not room.quotas and not room.active)
+            await self.until(
+                lambda room=room, claude=claude: (
+                    len(claude.calls) > 1 and not room.quotas and not room.active
+                )
+            )
             self.assertEqual(claude.calls[1]["phase"], "recovery")
             await room.close()
 
