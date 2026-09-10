@@ -61,7 +61,7 @@ ACTIONS = {
     "/retry": "Retry unavailable members; optionally add an agent name",
     "/status": "Inspect team state and each member",
     "/activity": "Read operational events and complete error details",
-    "/sessions": "Inspect private-session synchronization",
+    "/sessions": "Inspect backend-session synchronization",
     "/next": "Run one eligible turn; optionally add an agent name",
     "/reset-session": "Forget private context while idle; preserve public history",
     "/history": "Request historical messages after an optional event ID",
@@ -229,7 +229,7 @@ class RoomView:
             self.record(event["speaker"], event["text"])
         elif kind == "session.rebuilt":
             self.record(event["speaker"], event["text"])
-        elif kind == "agent.passed":
+        elif kind == "member.passed":
             self.record(event["speaker"], "Nothing to add; listening for new messages.")
         elif kind == "history.end":
             self.record(

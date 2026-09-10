@@ -187,7 +187,7 @@ class ChatRoom(Room):
     def control(self, action, target=None):
         names = list(self.adapters)
         if target is not None and target not in names:
-            raise ValueError(f"Unknown agent: {target}")
+            raise ValueError(f"Unknown member: {target}")
         if action in {"pause", "interrupt"}:
             self.manual_paused, self.reason = True, "user"
             if action == "interrupt":
@@ -196,7 +196,7 @@ class ChatRoom(Room):
             if self.active:
                 raise ValueError("Use /interrupt and wait for all active turns before resetting")
             for name in [target] if target else names:
-                self.sessions.invalidate(name, "Private session reset by the human")
+                self.sessions.invalidate(name, "Backend session reset by the human")
                 self.members[name].seen = None
             self.manual_paused, self.reason = True, "user"
         elif action in {"resume", "next", "retry"}:
@@ -615,7 +615,7 @@ class ChatRoom(Room):
             if self.workflow and turn.lane == "work" and turn.phase != "discussion":
                 raise ValueError("Formal work requires a checkpoint, verdict, or explicit blocker")
             self.emit(
-                "agent.passed", speaker=turn.speaker, turn_id=turn.turn_id, session_update=update
+                "member.passed", speaker=turn.speaker, turn_id=turn.turn_id, session_update=update
             )
             return "passed"
         data = {}
@@ -626,7 +626,7 @@ class ChatRoom(Room):
         self.messages.append(
             self.emit(
                 "message",
-                role="agent",
+                role="member",
                 speaker=turn.speaker,
                 text=reply or note or rejected or "Turn processed.",
                 turn_id=turn.turn_id,

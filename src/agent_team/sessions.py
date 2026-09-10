@@ -1,4 +1,4 @@
-"""Private sessions are disposable caches; the public event log is authoritative."""
+"""Backend sessions are disposable caches; the public event log is authoritative."""
 
 from __future__ import annotations
 
@@ -116,9 +116,9 @@ class Sessions:
         if not state.get("dirty") or state.get("turn_id") != turn_id:
             raise ValueError("Session identity belongs to a revoked invocation")
         if state.get("session_id") and state["session_id"] != identifier:
-            raise ValueError("Backend resumed a different private session")
+            raise ValueError("Backend resumed a different backend session")
         if any(s != speaker and v.get("session_id") == identifier for s, v in states.items()):
-            raise ValueError("Two agents cannot share the same private session")
+            raise ValueError("Two agents cannot share the same backend session")
         if state.get("session_id") != identifier:
             self.store.set_session(speaker, {**state, "session_id": identifier})
 

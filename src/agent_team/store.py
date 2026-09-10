@@ -40,7 +40,7 @@ class Store:
             )
             if session_update:
                 speaker, state = session_update
-                # The author already has its reply in the private session. Bind its
+                # The author already has its reply in the backend session. Bind its
                 # public cursor to that reply's ID in the very same transaction.
                 if kind == "message":
                     if state.get("cursor_mode") == "input":

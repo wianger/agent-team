@@ -363,11 +363,11 @@ class Room:
         if action == "reset-session":
             names = [a.name for a in self.config.agents]
             if target is not None and target not in names:
-                raise ValueError(f"Unknown agent: {target}")
+                raise ValueError(f"Unknown member: {target}")
             if self.active is not None:
                 raise ValueError("Use /interrupt and wait for the floor before resetting sessions")
             for name in [target] if target else names:
-                self.sessions.invalidate(name, "Private session reset by the human")
+                self.sessions.invalidate(name, "Backend session reset by the human")
             self.manual_paused, self.reason = True, "user"
             self.next_target = None
         elif action in {"pause", "interrupt"}:
@@ -389,7 +389,7 @@ class Room:
             if self.workflow and self.workflow.phase == "acceptance" and action == "next":
                 raise ValueError("Acceptance checks are pending; use /resume")
             if target is not None and target not in self.adapters:
-                raise ValueError(f"Unknown agent: {target}")
+                raise ValueError(f"Unknown member: {target}")
             if self.quotas and self.active:
                 raise ValueError("Wait for interrupted turns to stop before retrying the team")
             if self.quotas and action == "next":
@@ -556,7 +556,7 @@ class Room:
         self.messages.append(
             self.emit(
                 "message",
-                role="agent",
+                role="member",
                 speaker=speaker,
                 text=reply,
                 turn_id=turn_id,
@@ -720,7 +720,7 @@ class Room:
                         outcome = "passed"
                         self.passes.add(name)
                         self.emit(
-                            "agent.passed",
+                            "member.passed",
                             speaker=name,
                             turn_id=turn_id,
                             session_update=session_update,

@@ -15,13 +15,13 @@ HELP = """Type a message to participate.
 /pause          Pause after all active replies finish
 /interrupt      Cancel all active turns and pause without leaving
 /resume         Continue automatically, without a round limit
-/retry [agent]  Retry one unavailable member, or all unavailable members
+/retry [member] Retry one unavailable member, or all unavailable members
 /redirect text  Interrupt active work and reopen discussion with new guidance
 /revise text    Revisit the consensus, preserving documents and existing work
-/next [agent]   Advance exactly one eligible agent turn
+/next [member]  Advance exactly one eligible member turn
 /status         Show active thinkers, the writer, and completed turn count
-/sessions       Show private session IDs and public-message synchronization
-/reset-session [agent]  Forget private session(s), preserving public history; pause
+/sessions       Show backend session IDs and public-message synchronization
+/reset-session [member] Forget backend session(s), preserving public history; pause
 /plan           Show the current proposal, votes, and acceptance criteria
 /consensus      Inspect the latest approved document and prior versions
 /milestones          Show shared work, contributions, judgments, and checks
@@ -33,7 +33,7 @@ Any native usage limit pauses the whole team. /status shows reset and recovery-c
 Known provider reset times trigger a check after 30s; unknown resets require manual recovery.
 Discussion resumes only after all limited members pass checks; required votes are never waived.
 Automatic checks never override manual pauses, other errors, or a server restart.
-Resolve the issue and wait for active turns to stop, then /retry [agent] or /resume.
+Resolve the issue and wait for active turns to stop, then /retry [member] or /resume.
 Legacy serial mode still interrupts on ordinary human messages. Use /resume after a manual pause.
 """
 
@@ -73,7 +73,7 @@ def parse_input(line: str) -> dict | str | None:
 
 
 class LiveReplies:
-    """Independent draft buffers: interleaved deltas never become another agent's text."""
+    """Independent draft buffers: interleaved deltas never become another member's text."""
 
     def __init__(self):
         self.turns: dict[str, tuple[str, str]] = {}

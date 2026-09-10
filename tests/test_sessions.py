@@ -228,7 +228,7 @@ class SessionEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(backend.calls[2]["session_id"])
         self.assertEqual(len(public_messages(backend.calls[2]["prompt"])), 2)
         self.assertEqual(len([e for e in self.events if e["type"] == "session.rebuilt"]), 1)
-        self.assertEqual(len([m for m in self.room.messages if m["role"] == "agent"]), 2)
+        self.assertEqual(len([m for m in self.room.messages if m["role"] == "member"]), 2)
 
     async def test_unknown_failure_pauses_and_next_explicit_turn_resumes(self):
         await self.step("a")
@@ -265,7 +265,7 @@ class SessionEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(self.store.sessions()["a"]["session_id"])
         self.assertEqual(self.store.sessions()["a"]["synced_through"], 0)
         self.assertTrue(self.store.sessions()["a"]["dirty"])
-        self.assertFalse(any(m["role"] == "agent" for m in self.room.messages))
+        self.assertFalse(any(m["role"] == "member" for m in self.room.messages))
 
     async def test_peer_session_id_collision_is_rejected(self):
         await self.step("a")
@@ -420,7 +420,7 @@ class SessionEngineTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(sqlite3.IntegrityError):
             self.store.append(
                 "message",
-                role="agent",
+                role="member",
                 speaker="a",
                 text="not committed",
                 session_update=("a", {**before, "session_id": str(uuid.uuid4())}),

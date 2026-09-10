@@ -332,7 +332,7 @@ class CLISmokeTests(unittest.IsolatedAsyncioTestCase):
                                 raw = await process.stdout.readline()
                                 self.assertTrue(raw, "Implicit start unexpectedly exited")
                                 event = json.loads(raw)
-                                if event["type"] == "message" and event["role"] == "agent":
+                                if event["type"] == "message" and event["role"] == "member":
                                     break
                         _, errors = await process.communicate(b"/quit\n")
                         self.assertEqual(process.returncode, 0, errors.decode())
@@ -440,7 +440,7 @@ class CLISmokeTests(unittest.IsolatedAsyncioTestCase):
 
                     while True:
                         events = read_events(session / "events.sqlite3")
-                        if any(e["type"] == "agent.passed" for e in events):
+                        if any(e["type"] == "member.passed" for e in events):
                             break
                         await asyncio.sleep(0.01)
                     self.assertIsNone(server.returncode)

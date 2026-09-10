@@ -420,7 +420,7 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         flow.data.update(phase="acceptance", review_approvals=["member_a", "member_b"])
         self.store.append(
-            "message", role="agent", speaker="member_b", text="Reviewed", workflow=flow.snapshot()
+            "message", role="member", speaker="member_b", text="Reviewed", workflow=flow.snapshot()
         )
         self.room = Room(self.config, self.store, lambda e: None)
         self.assertEqual(self.room.workflow.phase, "review")

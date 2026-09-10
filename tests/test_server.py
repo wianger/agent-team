@@ -93,8 +93,8 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         user_a = await self.until(ar, lambda e: e["type"] == "message")
         user_b = await self.until(br, lambda e: e["type"] == "message")
         self.assertEqual(user_a, user_b)
-        agent_a = await self.until(ar, lambda e: e["type"] == "message" and e["role"] == "agent")
-        agent_b = await self.until(br, lambda e: e["type"] == "message" and e["role"] == "agent")
+        agent_a = await self.until(ar, lambda e: e["type"] == "message" and e["role"] == "member")
+        agent_b = await self.until(br, lambda e: e["type"] == "message" and e["role"] == "member")
         self.assertEqual(agent_a, agent_b)
 
     async def test_simultaneous_user_messages_are_both_committed_and_seen(self):
@@ -105,7 +105,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         aw.write(encode({"type": "say", "text": "first"}))
         bw.write(encode({"type": "say", "text": "second"}))
         await asyncio.gather(aw.drain(), bw.drain())
-        await self.until(ar, lambda e: e["type"] == "message" and e["role"] == "agent")
+        await self.until(ar, lambda e: e["type"] == "message" and e["role"] == "member")
         humans = [m for m in self.server.room.messages if m["role"] == "user"]
         self.assertEqual({m["text"] for m in humans}, {"first", "second"})
         self.assertLess(humans[0]["id"], humans[1]["id"])

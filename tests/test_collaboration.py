@@ -200,7 +200,7 @@ class JudgmentTests(unittest.TestCase):
         self.addCleanup(store.close)
         store.append(
             "message",
-            role="agent",
+            role="member",
             speaker="b",
             text="Judged",
             workflow=self.flow.snapshot(),

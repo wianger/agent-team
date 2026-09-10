@@ -46,7 +46,7 @@ def message(identifier, text, **updates):
         "type": "message",
         "id": identifier,
         "speaker": "member_a",
-        "role": "agent",
+        "role": "member",
         "text": text,
         **updates,
     }
@@ -91,7 +91,7 @@ class PresentationTests(unittest.TestCase):
     def test_quiet_events_do_not_pollute_the_conversation(self):
         for event in (
             {"type": "presence", "names": ["user"]},
-            {"type": "agent.passed", "speaker": "member_a"},
+            {"type": "member.passed", "speaker": "member_a"},
             {
                 "type": "workflow.changed",
                 "text": "Proposal changed",

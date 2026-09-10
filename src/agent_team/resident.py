@@ -202,7 +202,7 @@ class CodexResident(JsonProcess):
         on_session=None,
     ):
         if self.events is not None:
-            raise AdapterError("An agent cannot run two turns in its private session")
+            raise AdapterError("An agent cannot run two turns in its backend session")
         self.events = asyncio.Queue()
         self.on_activity, self.phase = on_activity, phase
         self.result_session_id = None
@@ -408,7 +408,7 @@ class ClaudeResident(JsonProcess):
         on_session=None,
     ):
         if self.events is not None:
-            raise AdapterError("An agent cannot run two turns in its private session")
+            raise AdapterError("An agent cannot run two turns in its backend session")
         # Explicit full-context mode intentionally starts a fresh private conversation.
         if self.process and (not persist_session or session_id != self.connection_session):
             await self.close()
@@ -475,7 +475,7 @@ class ClaudeResident(JsonProcess):
                 if event.get("type") == "result":
                     decoder.finish()
                     if persist_session and decoder.session_id != self.connection_session:
-                        raise AdapterError("Claude omitted or changed its private session ID")
+                        raise AdapterError("Claude omitted or changed its backend session ID")
                     self.result_session_id = decoder.session_id
                     return
         except AdapterError as exc:
