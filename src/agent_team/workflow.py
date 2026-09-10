@@ -68,24 +68,24 @@ def texts(value: object, label: str, *, allow_empty: bool = False) -> list[str]:
 def validate_plan(action: dict, members: list[str]) -> dict:
     summary = nonempty(action.get("summary"), "summary")
     acceptance = texts(action.get("acceptance_criteria"), "acceptance")
-    raw_tasks = action.get("tasks")
-    if not isinstance(raw_tasks, list) or not raw_tasks:
-        raise ValueError("A proposal needs at least one shared task")
-    tasks, ids = [], set()
-    for raw in raw_tasks:
+    raw_milestones = action.get("milestones")
+    if not isinstance(raw_milestones, list) or not raw_milestones:
+        raise ValueError("A proposal needs at least one shared milestone")
+    milestones, ids = [], set()
+    for raw in raw_milestones:
         if not isinstance(raw, dict) or not valid_name(raw.get("id")):
-            raise ValueError("Each task needs a valid id")
-        task_id = raw["id"]
-        if task_id in ids:
-            raise ValueError(f"Duplicate task id: {task_id}")
-        ids.add(task_id)
+            raise ValueError("Each milestone needs a valid id")
+        milestone_id = raw["id"]
+        if milestone_id in ids:
+            raise ValueError(f"Duplicate milestone id: {milestone_id}")
+        ids.add(milestone_id)
         # Accepted for old proposals, but never grants exclusive ownership.
         owner = raw.get("owner")
         if owner is not None and owner not in members:
-            raise ValueError(f"Suggested owner of {task_id} must be a configured member")
-        tasks.append(
+            raise ValueError(f"Suggested owner of {milestone_id} must be a configured member")
+        milestones.append(
             {
-                "id": task_id,
+                "id": milestone_id,
                 "title": nonempty(raw.get("title"), "title"),
                 "details": nonempty(raw.get("details"), "details"),
                 "owner": owner,
@@ -97,10 +97,14 @@ def validate_plan(action: dict, members: list[str]) -> dict:
             }
         )
     visited = set()
-    while len(visited) < len(tasks):
-        ready = [t for t in tasks if t["id"] not in visited and set(t["depends_on"]) <= visited]
+    while len(visited) < len(milestones):
+        ready = [
+            t for t in milestones if t["id"] not in visited and set(t["depends_on"]) <= visited
+        ]
         if not ready:
-            raise ValueError("Task dependencies contain a cycle, self-reference, or unknown id")
+            raise ValueError(
+                "Milestone dependencies contain a cycle, self-reference, or unknown id"
+            )
         visited.update(t["id"] for t in ready)
     checks = action.get("acceptance_checks")
     if not isinstance(checks, list) or not checks:
@@ -116,7 +120,7 @@ def validate_plan(action: dict, members: list[str]) -> dict:
     return {
         "summary": summary,
         "acceptance_criteria": acceptance,
-        "tasks": tasks,
+        "milestones": milestones,
         "acceptance_checks": checks,
     }
 
@@ -153,9 +157,9 @@ class Workflow:
         self.data.setdefault("revision_base", None)
         self.data.setdefault("revision_request", None)
         if self.data["proposal"]:
-            for task in self.data["proposal"]["tasks"]:
-                task.setdefault("revision", 0)
-                task.setdefault("contributions", [])
+            for milestone in self.data["proposal"]["milestones"]:
+                milestone.setdefault("revision", 0)
+                milestone.setdefault("contributions", [])
 
     @property
     def phase(self) -> str:
@@ -216,21 +220,23 @@ class Workflow:
         history.append(record)
         return record
 
-    def current_task(self) -> dict | None:
+    def current_milestone(self) -> dict | None:
         proposal = self.data["proposal"]
         if not proposal:
             return None
         if self.phase == "judging":
             return next(
-                t for t in proposal["tasks"] if t["id"] == self.data["checkpoint"]["task_id"]
+                t
+                for t in proposal["milestones"]
+                if t["id"] == self.data["checkpoint"]["milestone_id"]
             )
         if self.phase != "implementation":
             return None
-        done = {t["id"] for t in proposal["tasks"] if t["status"] == "done"}
+        done = {t["id"] for t in proposal["milestones"] if t["status"] == "done"}
         return next(
             (
                 t
-                for t in proposal["tasks"]
+                for t in proposal["milestones"]
                 if t["status"] == "pending" and set(t["depends_on"]) <= done
             ),
             None,
@@ -255,8 +261,8 @@ class Workflow:
                 raise ValueError("That member cannot judge this revision or has already approved")
             return target
         if self.phase == "implementation":
-            if self.current_task() is None:
-                raise ValueError("No executable shared task")
+            if self.current_milestone() is None:
+                raise ValueError("No executable shared milestone")
             if self.data["next_writer"] in eligible:
                 return self.data["next_writer"]
         for offset in range(len(self.members)):
@@ -330,14 +336,14 @@ class Workflow:
         if self.phase == "review" and kind in {"review_pass", "review_fail"}:
             evidence = nonempty(action.get("evidence"), "evidence")
             if kind == "review_fail":
-                ids = texts(action.get("task_ids"), "task_ids")
-                if not set(ids) <= {t["id"] for t in self.data["proposal"]["tasks"]}:
-                    raise ValueError("Review references an unknown task")
+                ids = texts(action.get("milestone_ids"), "milestone_ids")
+                if not set(ids) <= {t["id"] for t in self.data["proposal"]["milestones"]}:
+                    raise ValueError("Review references an unknown milestone")
                 self.data["feedback"].append(
                     {
                         "speaker": speaker,
                         "action": kind,
-                        "task_ids": ids,
+                        "milestone_ids": ids,
                         "evidence": evidence,
                     }
                 )
@@ -352,9 +358,11 @@ class Workflow:
         raise ValueError(f"Phase {self.phase} does not accept action {kind}")
 
     def contribute(self, speaker: str, action: dict) -> str:
-        task = self.current_task()
-        if not task or action.get("task_id") != task["id"]:
-            raise ValueError("Contribute to the current shared task; dependencies must be accepted")
+        milestone = self.current_milestone()
+        if not milestone or action.get("milestone_id") != milestone["id"]:
+            raise ValueError(
+                "Contribute to the current shared milestone; dependencies must be accepted"
+            )
         ready = action.get("ready", action["action"] == "task_done")
         if type(ready) is not bool:
             raise ValueError("ready must be a boolean")
@@ -370,13 +378,13 @@ class Workflow:
             full = (self.config.workspace / filename).resolve()
             if not full.is_relative_to(self.config.workspace.resolve()) or not full.is_file():
                 raise ValueError(f"Reported file is missing or outside the workspace: {filename}")
-        task["revision"] += 1
-        task.update(status="judging", report=report)
-        task["contributions"].append(
+        milestone["revision"] += 1
+        milestone.update(status="judging", report=report)
+        milestone["contributions"].append(
             {
                 **report,
                 "author": speaker,
-                "revision": task["revision"],
+                "revision": milestone["revision"],
                 "ready": ready,
                 "judgments": [],
             }
@@ -385,20 +393,20 @@ class Workflow:
             phase="judging",
             review_approvals=[],
             checkpoint={
-                "task_id": task["id"],
-                "revision": task["revision"],
+                "milestone_id": milestone["id"],
+                "revision": milestone["revision"],
                 "author": speaker,
                 "ready": ready,
                 "approvals": [],
             },
             next_writer=self.members[(self.members.index(speaker) + 1) % len(self.members)],
         )
-        return f"{speaker} submits {task['id']} r{task['revision']} for peer judgment."
+        return f"{speaker} submits {milestone['id']} r{milestone['revision']} for peer judgment."
 
     def judge(self, speaker: str, action: dict) -> str:
         checkpoint = self.data["checkpoint"]
         if (
-            action.get("task_id") != checkpoint["task_id"]
+            action.get("milestone_id") != checkpoint["milestone_id"]
             or type(action.get("revision")) is not int
             or action["revision"] != checkpoint["revision"]
         ):
@@ -406,40 +414,45 @@ class Workflow:
         if speaker not in self.eligible():
             raise ValueError("Authors cannot judge their own checkpoint or vote twice")
         evidence = nonempty(action.get("evidence"), "evidence")
-        task = self.current_task()
+        milestone = self.current_milestone()
         verdict = {"speaker": speaker, "action": action["action"], "evidence": evidence}
-        task["contributions"][-1]["judgments"].append(verdict)
+        milestone["contributions"][-1]["judgments"].append(verdict)
         if action["action"] == "judge_fail":
             self.data["feedback"].append(
                 {
                     **verdict,
-                    "task_ids": [task["id"]],
-                    "revision": task["revision"],
+                    "milestone_ids": [milestone["id"]],
+                    "revision": milestone["revision"],
                 }
             )
-            self.reopen({task["id"]})
+            self.reopen({milestone["id"]})
             # The critic can demonstrate a fix; the previous author then judges it.
             self.data["next_writer"] = speaker
-            return f"{speaker} challenges {task['id']} r{task['revision']}: {evidence}"
+            return f"{speaker} challenges {milestone['id']} r{milestone['revision']}: {evidence}"
         checkpoint["approvals"].append(speaker)
         if set(checkpoint["approvals"]) == set(self.members) - {checkpoint["author"]}:
-            task["status"] = "done" if checkpoint["ready"] else "pending"
+            milestone["status"] = "done" if checkpoint["ready"] else "pending"
             self.data.update(phase="implementation", checkpoint=None)
-            if all(t["status"] == "done" for t in self.data["proposal"]["tasks"]):
+            if all(t["status"] == "done" for t in self.data["proposal"]["milestones"]):
                 self.data.update(phase="review", next_writer=None, review_approvals=[])
-            return f"Peers accept {task['id']} r{task['revision']}; status: {task['status']}."
-        return f"{speaker} accepts {task['id']} r{task['revision']}; awaiting other peers."
+            return (
+                f"Peers accept {milestone['id']} r{milestone['revision']}; "
+                f"status: {milestone['status']}."
+            )
+        return (
+            f"{speaker} accepts {milestone['id']} r{milestone['revision']}; awaiting other peers."
+        )
 
     def reopen(self, ids: set[str]) -> None:
-        tasks = self.data["proposal"]["tasks"]
+        milestones = self.data["proposal"]["milestones"]
         while True:
-            expanded = ids | {t["id"] for t in tasks if set(t["depends_on"]) & ids}
+            expanded = ids | {t["id"] for t in milestones if set(t["depends_on"]) & ids}
             if expanded == ids:
                 break
             ids = expanded
-        for task in tasks:
-            if task["id"] in ids:
-                task.update(status="pending", report=None)
+        for milestone in milestones:
+            if milestone["id"] in ids:
+                milestone.update(status="pending", report=None)
         self.data.update(
             phase="implementation", review_approvals=[], acceptance_results=[], checkpoint=None
         )
@@ -454,7 +467,7 @@ class Workflow:
         ):
             self.data.update(phase="completed", acceptance_results=results)
             return "Shared work, peer judgments, integration reviews, and acceptance checks passed."
-        self.reopen({t["id"] for t in self.data["proposal"]["tasks"]})
+        self.reopen({t["id"] for t in self.data["proposal"]["milestones"]})
         self.data["acceptance_results"] = results
         return "Acceptance checks failed. Continue shared repairs, peer judgment, and acceptance."
 
@@ -465,7 +478,8 @@ def workflow_instructions(workflow: Workflow, speaker: str) -> str:
     common = (
         "Turn the user's idea into an agreed plan and a verified implementation together.\n"
         "Current coordinator state takes precedence over superseded plans in the transcript.\n"
-        "Tasks and files are shared, not private assignments. You may improve another member's "
+        "Milestones and files are shared, not private assignments. You may improve another "
+        "member's "
         "implementation, and they must judge yours. Respond to critiques with evidence.\n"
         "Preserve existing edits. No unrelated deletions, git resets, commits, pushes, or deploys. "
         "Do not modify .agent-team data. Inspect interrupted work before continuing.\n"
@@ -494,7 +508,7 @@ def workflow_instructions(workflow: Workflow, speaker: str) -> str:
             "Previous contributions are context, not automatic acceptance of revised milestones.\n"
             'Proposal: {"action":"propose","summary":"goal, approach, assumptions and tradeoffs",'
             '"acceptance_criteria":["checkable requirement"],'
-            '"tasks":[{"id":"T1","title":"Shared milestone",'
+            '"milestones":[{"id":"T1","title":"Shared milestone",'
             '"details":"what to implement and judge","depends_on":[]}],'
             '"acceptance_checks":[["python3","-m","unittest","discover","-s","tests"]]}\n'
             "Choose meaningful, noninteractive acceptance commands. The coordinator "
@@ -504,15 +518,19 @@ def workflow_instructions(workflow: Workflow, speaker: str) -> str:
             "Ordinary discussion can omit an action. Agreeing in prose or [[PASS]] is not a vote.\n"
         )
     elif workflow.phase == "implementation":
-        task = workflow.current_task()
+        milestone = workflow.current_milestone()
         instructions = (
-            f"You hold the write turn for shared task: {json.dumps(task, ensure_ascii=False)}\n"
+            "You hold the write turn for shared milestone: "
+            f"{json.dumps(milestone, ensure_ascii=False)}\n"
             "Read previous contributions and judgments. Actually inspect and change files and run "
             "relevant checks. You may revise anyone's code within the agreed scope.\n"
             "Submit a checkpoint whenever useful, including partial work: peers inspect it before "
-            "you continue. ready=false means a draft needing more work; ready=true requests task "
-            "acceptance. Neither self-report completes a task without independent peer approval.\n"
-            f'Checkpoint: {{"action":"contribute","version":{version},"task_id":"{task["id"]}",'
+            "you continue. ready=false means a draft needing more work; ready=true requests "
+            "milestone "
+            "acceptance. Neither self-report completes a milestone without independent peer "
+            "approval.\n"
+            f'Checkpoint: {{"action":"contribute","version":{version},'
+            f'"milestone_id":"{milestone["id"]}",'
             '"ready":true,"summary":"actual changes and response to feedback",'
             '"files":["existing/relative/path"],"tests":"commands and results, or not run"}.\n'
             "Legacy task_done means a ready=true checkpoint, not final acceptance.\n"
@@ -520,16 +538,18 @@ def workflow_instructions(workflow: Workflow, speaker: str) -> str:
     elif workflow.phase == "judging":
         point = state["checkpoint"]
         instructions = (
-            f"Judge {point['author']}'s {point['task_id']} r{point['revision']} now. "
-            "Do not wait until all tasks finish. Read the actual files, compare the requirements, "
+            f"Judge {point['author']}'s {point['milestone_id']} r{point['revision']} now. "
+            "Do not wait until all milestones finish. Read the actual files, compare the "
+            "requirements, "
             "and challenge correctness, design, tests, and prior feedback. Do not rubber-stamp.\n"
             "This turn is read-only. Give precise evidence, file locations, failure cases and a "
             "concrete improvement. A rejection returns to implementation; you may then fix the "
             "other agent's work, and that agent will judge your revision.\n"
-            f'Verdict: {{"action":"judge_pass","version":{version},"task_id":"{point["task_id"]}",'
+            f'Verdict: {{"action":"judge_pass","version":{version},'
+            f'"milestone_id":"{point["milestone_id"]}",'
             f'"revision":{point["revision"]},"evidence":"specific inspection and reasoning"}}.\n'
             "Use judge_fail with the same fields to request changes. Judge the actual readiness "
-            "claim: a good partial draft may pass without completing the task.\n"
+            "claim: a good partial draft may pass without completing the milestone.\n"
         )
     else:
         instructions = (
@@ -538,7 +558,7 @@ def workflow_instructions(workflow: Workflow, speaker: str) -> str:
             "Read-only turn: report issues rather than modifying files. All members review before "
             "the coordinator runs the agreed checks.\n"
             f'Pass: {{"action":"review_pass","version":{version},"evidence":"files inspected"}}.\n'
-            f'Request repairs: {{"action":"review_fail","version":{version},"task_ids":["T1"],'
+            f'Request repairs: {{"action":"review_fail","version":{version},"milestone_ids":["T1"],'
             '"evidence":"specific defect, location, and requested improvement"}.\n'
         )
     return common + instructions + "\n" + STATE_MARKER + json.dumps(state, ensure_ascii=False)

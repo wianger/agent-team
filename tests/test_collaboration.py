@@ -21,7 +21,7 @@ def shared_plan():
         "action": "propose",
         "summary": "Build an addition function together",
         "acceptance_criteria": ["add(2, 3) returns 5"],
-        "tasks": [
+        "milestones": [
             {"id": "code", "title": "Addition", "details": "Implement add", "depends_on": []}
         ],
         "acceptance_checks": [
@@ -50,7 +50,7 @@ class JudgmentTests(unittest.TestCase):
             {
                 "action": "contribute",
                 "version": 1,
-                "task_id": "code",
+                "milestone_id": "code",
                 "ready": ready,
                 "summary": "Implemented addition",
                 "files": ["calc.py"],
@@ -64,7 +64,7 @@ class JudgmentTests(unittest.TestCase):
             {
                 "action": kind,
                 "version": 1,
-                "task_id": "code",
+                "milestone_id": "code",
                 "revision": revision
                 if revision is not None
                 else self.flow.data["checkpoint"]["revision"],
@@ -88,7 +88,7 @@ class JudgmentTests(unittest.TestCase):
             self.judge("b")
         self.judge("c")
         self.assertEqual(self.flow.phase, "review")
-        self.assertEqual(self.flow.data["proposal"]["tasks"][0]["status"], "done")
+        self.assertEqual(self.flow.data["proposal"]["milestones"][0]["status"], "done")
 
     def test_critic_can_revise_peer_file_and_original_author_judges(self):
         self.contribute()
@@ -104,7 +104,7 @@ class JudgmentTests(unittest.TestCase):
         self.assertEqual(self.flow.snapshot(), before)
         self.judge("a")
         self.judge("c")
-        history = self.flow.data["proposal"]["tasks"][0]["contributions"]
+        history = self.flow.data["proposal"]["milestones"][0]["contributions"]
         self.assertEqual([c["author"] for c in history], ["a", "b"])
         self.assertEqual(history[0]["judgments"][0]["action"], "judge_fail")
         self.assertEqual(history[1]["judgments"][0]["speaker"], "a")
@@ -143,14 +143,14 @@ class JudgmentTests(unittest.TestCase):
         self.judge("b")
         self.judge("c")
         self.assertEqual(self.flow.phase, "implementation")
-        self.assertEqual(self.flow.current_task()["status"], "pending")
+        self.assertEqual(self.flow.current_milestone()["status"], "pending")
         self.assertEqual(self.flow.choose(0), "b")
         # Explicit human targeting may choose any writer, not just the preferred one.
         self.assertEqual(self.flow.choose(0, "c"), "c")
 
     def test_owner_is_optional_and_never_exclusive(self):
         proposal = shared_plan()
-        proposal["tasks"][0]["owner"] = "c"
+        proposal["milestones"][0]["owner"] = "c"
         flow = Workflow(self.config)
         flow.apply("a", proposal)
         for member in flow.members:
@@ -163,13 +163,13 @@ class JudgmentTests(unittest.TestCase):
         proposal = shared_plan()
         proposal["summary"] = "x" * 250_000
         proposal["acceptance_criteria"] *= 40
-        proposal["tasks"] = [
-            {**proposal["tasks"][0], "id": f"T{i}", "details": "d" * 10_000} for i in range(35)
+        proposal["milestones"] = [
+            {**proposal["milestones"][0], "id": f"T{i}", "details": "d" * 10_000} for i in range(35)
         ]
         proposal["acceptance_checks"] *= 12
         validated = validate_plan(proposal, self.flow.members)
         self.assertEqual(validated["summary"], proposal["summary"])
-        self.assertEqual(len(validated["tasks"]), 35)
+        self.assertEqual(len(validated["milestones"]), 35)
         self.contribute()
         evidence = "Evidence " + "e" * 250_000
         self.flow.apply(
@@ -177,13 +177,13 @@ class JudgmentTests(unittest.TestCase):
             {
                 "action": "judge_pass",
                 "version": 1,
-                "task_id": "code",
+                "milestone_id": "code",
                 "revision": 1,
                 "evidence": evidence,
             },
         )
         self.assertEqual(
-            self.flow.current_task()["contributions"][0]["judgments"][0]["evidence"], evidence
+            self.flow.current_milestone()["contributions"][0]["judgments"][0]["evidence"], evidence
         )
 
     def test_judging_permissions_are_read_only(self):
@@ -228,12 +228,12 @@ class CollaborativeFixture:
         elif phase == "planning":
             action.update(action="approve")
         elif phase == "implementation":
-            revision = state["proposal"]["tasks"][0]["revision"]
+            revision = state["proposal"]["milestones"][0]["revision"]
             operator = "-" if self.reject_first and revision == 0 else "+"
             (self.workspace / "calc.py").write_text(f"def add(a, b):\n    return a {operator} b\n")
             action.update(
                 action="contribute",
-                task_id="code",
+                milestone_id="code",
                 ready=revision >= self.drafts,
                 summary="Responded to the previous contribution",
                 files=["calc.py"],
@@ -243,7 +243,7 @@ class CollaborativeFixture:
             source = (self.workspace / "calc.py").read_text()
             action.update(
                 action="judge_fail" if "a - b" in source else "judge_pass",
-                task_id="code",
+                milestone_id="code",
                 revision=state["checkpoint"]["revision"],
                 evidence="calc.py:2 subtracts instead of adding"
                 if "a - b" in source
@@ -286,7 +286,7 @@ class CollaborationIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_rejection_fix_and_reciprocal_judgment_before_completion(self):
         room = await self.run_fixture(reject_first=True)
-        history = room.workflow.data["proposal"]["tasks"][0]["contributions"]
+        history = room.workflow.data["proposal"]["milestones"][0]["contributions"]
         self.assertEqual([c["author"] for c in history], ["b", "a"])
         self.assertEqual(history[0]["judgments"][0]["action"], "judge_fail")
         self.assertEqual(history[1]["judgments"][0]["speaker"], "b")
@@ -298,7 +298,7 @@ class CollaborationIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_implementation_continues_past_former_work_budget(self):
         room = await self.run_fixture(drafts=24)
-        history = room.workflow.data["proposal"]["tasks"][0]["contributions"]
+        history = room.workflow.data["proposal"]["milestones"][0]["contributions"]
         self.assertEqual(len(history), 25)
         self.assertGreater(room.turns, 40)
         self.assertTrue(all(c["judgments"] for c in history))

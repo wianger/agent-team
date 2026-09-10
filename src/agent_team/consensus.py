@@ -67,9 +67,11 @@ def render_consensus(record: dict) -> str:
             "",
         ]
     )
-    for task in proposal["tasks"]:
-        lines.extend([f"### {task['id']} · {task['title']}", "", task["details"], ""])
-        lines.extend(["Dependencies: " + (", ".join(task["depends_on"]) or "none"), ""])
+    for milestone in proposal["milestones"]:
+        lines.extend(
+            [f"### {milestone['id']} · {milestone['title']}", "", milestone["details"], ""]
+        )
+        lines.extend(["Dependencies: " + (", ".join(milestone["depends_on"]) or "none"), ""])
     lines.extend(
         [
             "## Agreed acceptance commands",

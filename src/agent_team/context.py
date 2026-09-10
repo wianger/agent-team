@@ -13,7 +13,7 @@ SHARED_RESPONSIBILITIES = (
     "All members share equal responsibility: think independently, discuss goals and architecture, "
     "propose and challenge plans, implement shared work, and critically review and verify peer "
     "changes. Follow the current phase's workflow scope and configured permissions.\n"
-    "Do not infer fixed specializations, seniority, or task ownership from agent names or "
+    "Do not infer fixed specializations, seniority, or milestone ownership from agent names or "
     "backends. Implementation and judgment duties change with the current phase and contribution, "
     "not permanent roles.\n"
 )
@@ -59,7 +59,8 @@ def build_prompt(
         "checks with all built-in tools available. You may inspect files, run non-mutating "
         "commands, and use web tools for research in every phase. Read-only phases describe "
         "workflow scope, not a tool or network restriction. These capabilities do not expand "
-        "the agreed task scope. Discussion, planning, judgment, and integration review must not "
+        "the agreed milestone scope. Discussion, planning, judgment, and integration review "
+        "must not "
         "modify project files; only the assigned implementation turn may do so. Do not start "
         "background writers or leave tools running beyond your turn. Do not bypass a denied "
         "action; report blockers.\n"

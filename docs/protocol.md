@@ -2,7 +2,7 @@
 
 Humans use messages and CLI commands. Backend authors use this protocol. Built-in adapters include phase instructions and current workflow state in every prompt. Persistent CLI sessions receive the full public transcript on creation and missing public messages on subsequent turns. Stateless/full mode always receives the complete transcript.
 
-Every member receives the same shared responsibilities for independent analysis, discussion, implementation, and reciprocal review. There are no backend-specific default specialties or permanent writer/reviewer roles. The optional `role` configuration field adds a task-specific focus alongside these responsibilities; it never changes phase permissions, floor eligibility, or task ownership. An empty or omitted `role` adds no focus. Current phase and contribution authorship determine who can implement or judge.
+Every member receives the same shared responsibilities for independent analysis, discussion, implementation, and reciprocal review. There are no backend-specific default specialties or permanent writer/reviewer roles. The optional `role` configuration field adds a milestone-specific focus alongside these responsibilities; it never changes phase permissions, floor eligibility, or milestone ownership. An empty or omitted `role` adds no focus. Current phase and contribution authorship determine who can implement or judge.
 
 Execution permissions are separate from workflow authorization. The shipped configuration selects `interaction_mode = "chatroom"` and `permission_mode = "full_auto"`. Full-auto applies to every phase and lane, including discussion, planning, implementation, judgment, review, and chat. Codex receives `dangerFullAccess` with `approvalPolicy: "never"` on every turn, including resumed sessions. Claude uses `auto` with `--permission-prompts none` and `--tools default`, including web tools. Its registered `PreToolUse` callback does not restrict tools by phase in full-auto; it returns an empty result during an active turn to preserve native auto checks, and denies tool calls after the turn ends. Claude must confirm and retain `permissionMode: "auto"`; other modes fail closed. Native policies and host network restrictions still apply.
 
@@ -10,7 +10,7 @@ Legacy `serial` mode retains per-invocation CLIs with the same full-auto permiss
 
 End formal work replies with one `<team-action>JSON</team-action>` block, after the public explanation. Plain discussion may omit it. Conversation-only turns may attach only a `request_revision` block, never an approval, checkpoint, or verdict. Interim commentary must not include action blocks. No text may follow the final block. Actions take effect only after a successfully completed invocation; transport `done` is not project completion.
 
-There are no round, text-length, task-count, or command-count budgets. Required types, nonempty fields, valid identifiers, real file paths, dependency order, and matching versions remain enforced.
+There are no round, text-length, milestone-count, or command-count budgets. Required types, nonempty fields, valid identifiers, real file paths, dependency order, and matching versions remain enforced.
 
 ## Concurrent room scheduling
 
@@ -33,7 +33,7 @@ Discussion and eligible formal reviews can run concurrently. Writers/checks wait
   "action": "propose",
   "summary": "Goal, scope, approach, assumptions, and tradeoffs",
   "acceptance_criteria": ["Observable outcome"],
-  "tasks": [
+  "milestones": [
     {"id":"T1","title":"Shared module","details":"Implement and judge the interface","depends_on":[]},
     {"id":"T2","title":"Shared tests","details":"Cover the acceptance criteria","depends_on":["T1"]}
   ],
@@ -41,7 +41,7 @@ Discussion and eligible formal reviews can run concurrently. Writers/checks wait
 }
 ```
 
-Tasks need unique IDs and complete, acyclic dependencies. Plans require at least one task, acceptance criterion, and meaningful executable command. Commands must be nonempty argument arrays, not shell strings. The optional legacy `owner` must name a configured member, but neither restricts who may implement nor controls floor scheduling.
+Milestones need unique IDs and complete, acyclic dependencies. Plans require at least one milestone, acceptance criterion, and meaningful executable command. Commands must be nonempty argument arrays, not shell strings. The optional legacy `owner` must name a configured member, but neither restricts who may implement nor controls floor scheduling.
 
 A proposal creates a new version and clears previous votes. The proposer must also explicitly approve on a later turn:
 
@@ -79,39 +79,39 @@ Human `/revise <guidance>` aliases `/redirect` and sends the existing `{"type":"
 During `implementation`, any member holding the floor can improve the current dependency-ready milestone, including files written by peers. No member owns an exclusive coding partition.
 
 ```json
-{"action":"contribute","version":1,"task_id":"T1","ready":false,"summary":"Draft interface; please challenge the boundary handling","files":["module.py"],"tests":"Not run; draft only"}
+{"action":"contribute","version":1,"milestone_id":"T1","ready":false,"summary":"Draft interface; please challenge the boundary handling","files":["module.py"],"tests":"Not run; draft only"}
 ```
 
-Use `ready: false` for partial work and `ready: true` to request task acceptance. Omitted `ready` defaults to false for `contribute`. The legacy `task_done` action defaults to `ready: true`, but still only submits a checkpoint; it cannot bypass peer judgment.
+Use `ready: false` for partial work and `ready: true` to request milestone acceptance. Omitted `ready` defaults to false for `contribute`. The legacy `task_done` action defaults to `ready: true`, but still only submits a checkpoint; it cannot bypass peer judgment.
 
 Report actual changes and actual test results honestly. `files` must list existing workspace-relative files, with no absolute paths, parent traversal, or escaping symlinks. The list may be empty for work that only inspects or runs checks. Describe intentional deletions in `summary`.
 
-The coordinator increments the task's `revision`, records the author and report in `contributions`, marks the task `judging`, and creates:
+The coordinator increments the milestone's `revision`, records the author and report in `contributions`, marks the milestone `judging`, and creates:
 
 ```json
-{"task_id":"T1","revision":1,"author":"codex","ready":false,"approvals":[]}
+{"milestone_id":"T1","revision":1,"author":"codex","ready":false,"approvals":[]}
 ```
 
-This is the current `checkpoint`. Dependency tasks do not become available merely because their author claims completion.
+This is the current `checkpoint`. Dependency milestones do not become available merely because their author claims completion.
 
 ## Immediate peer judgment and revision
 
 In `judging`, every member other than the checkpoint author must inspect the actual implementation. This happens after each checkpoint, not only after the entire project has been written. Judgment turns must not modify project files; full-auto keeps tool and network capabilities available for inspection and research.
 
 ```json
-{"action":"judge_pass","version":1,"task_id":"T1","revision":1,"evidence":"Read module.py and checked the boundary cases; this draft is sound"}
-{"action":"judge_fail","version":1,"task_id":"T1","revision":1,"evidence":"module.py:12 drops zero; use an explicit None check and add a zero regression"}
+{"action":"judge_pass","version":1,"milestone_id":"T1","revision":1,"evidence":"Read module.py and checked the boundary cases; this draft is sound"}
+{"action":"judge_fail","version":1,"milestone_id":"T1","revision":1,"evidence":"module.py:12 drops zero; use an explicit None check and add a zero regression"}
 ```
 
-Judgments must match both proposal version and checkpoint revision. Self-judgment, duplicate approval, stale votes, and votes about other tasks are rejected atomically.
+Judgments must match both proposal version and checkpoint revision. Self-judgment, duplicate approval, stale votes, and votes about other milestones are rejected atomically.
 
-A rejection is saved in the contribution's judgment history and shared feedback. It reopens the task and downstream dependencies, revokes review approvals, and gives the critic the next implementation turn. The critic may demonstrate the fix; the original author then becomes an eligible judge of that revision. Humans can override the next writer with `/next agent`.
+A rejection is saved in the contribution's judgment history and shared feedback. It reopens the milestone and downstream dependencies, revokes review approvals, and gives the critic the next implementation turn. The critic may demonstrate the fix; the original author then becomes an eligible judge of that revision. Humans can override the next writer with `/next agent`.
 
 After every peer accepts a checkpoint:
 
 - `ready: false`: the milestone returns to pending for further shared work.
 - `ready: true`: the milestone becomes done and releases downstream dependencies.
-- The next writer rotates from the checkpoint author, rather than granting ownership to a task assignee.
+- The next writer rotates from the checkpoint author, rather than granting ownership to a milestone assignee.
 
 Every revision must receive fresh judgments. Prior contributions and critiques remain in workflow state and the public conversation.
 
@@ -121,10 +121,10 @@ Once all milestones are accepted, every member reviews the entire integrated res
 
 ```json
 {"action":"review_pass","version":1,"evidence":"Inspected the module, callers, and tests against every acceptance criterion"}
-{"action":"review_fail","version":1,"task_ids":["T1"],"evidence":"Specific integration defect, location, and requested improvement"}
+{"action":"review_fail","version":1,"milestone_ids":["T1"],"evidence":"Specific integration defect, location, and requested improvement"}
 ```
 
-A failed review reopens the named tasks and their downstream dependencies. Repairs return through checkpoints and peer judgment before another integration review.
+A failed review reopens the named milestones and their downstream dependencies. Repairs return through checkpoints and peer judgment before another integration review.
 
 After unanimous integration approval, the coordinator executes `acceptance_checks` in `acceptance`. All must exit 0 for `completed`; models cannot submit a completed action. Failure preserves complete output and actual exit codes, reopens shared work, and repeats without a repair-attempt budget.
 

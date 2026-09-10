@@ -577,7 +577,7 @@ class MockAdapter:
                             "hello('team') returns Hello, team!",
                             "Provide usage instructions",
                         ],
-                        "tasks": [
+                        "milestones": [
                             {
                                 "id": "code",
                                 "title": "Implement the function",
@@ -620,15 +620,15 @@ class MockAdapter:
                     "[demo] The mock backend only implements the built-in fixture.",
                     {
                         "action": "blocked",
-                        "reason": "This task requires a real CLI backend",
+                        "reason": "This milestone requires a real CLI backend",
                     },
                 )
-            tasks = state["proposal"]["tasks"]
-            done = {t["id"] for t in tasks if t["status"] == "done"}
-            task = next(
-                t for t in tasks if t["status"] == "pending" and set(t["depends_on"]) <= done
+            milestones = state["proposal"]["milestones"]
+            done = {t["id"] for t in milestones if t["status"] == "done"}
+            milestone = next(
+                t for t in milestones if t["status"] == "pending" and set(t["depends_on"]) <= done
             )
-            if task["id"] == "code":
+            if milestone["id"] == "code":
                 filename, content = "hello.py", 'def hello(name):\n    return f"Hello, {name}!"\n'
             else:
                 filename, content = "HOWTO.md", "# Hello\n\nCall hello(name) from hello.py.\n"
@@ -647,7 +647,7 @@ class MockAdapter:
                 {
                     "action": "task_done",
                     "version": version,
-                    "task_id": task["id"],
+                    "milestone_id": milestone["id"],
                     "summary": f"Created {filename}",
                     "files": [filename],
                     "tests": "Not run; awaiting coordinator acceptance checks",
@@ -655,14 +655,16 @@ class MockAdapter:
             )
         if state["phase"] == "judging":
             point = state["checkpoint"]
-            task = next(t for t in state["proposal"]["tasks"] if t["id"] == point["task_id"])
-            contents = {f: (self.workspace / f).read_text() for f in task["report"]["files"]}
+            milestone = next(
+                t for t in state["proposal"]["milestones"] if t["id"] == point["milestone_id"]
+            )
+            contents = {f: (self.workspace / f).read_text() for f in milestone["report"]["files"]}
             return action_reply(
                 f"[demo] I inspected {point['author']}'s files: {', '.join(contents)}.",
                 {
                     "action": "judge_pass",
                     "version": version,
-                    "task_id": point["task_id"],
+                    "milestone_id": point["milestone_id"],
                     "revision": point["revision"],
                     "evidence": f"Read the submitted artifacts: {contents!r}",
                 },

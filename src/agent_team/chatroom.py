@@ -39,8 +39,8 @@ class Turn:
 @dataclass
 class Member:
     queue: asyncio.Queue = field(default_factory=asyncio.Queue)
-    runner: asyncio.Task | None = None
-    invocation: asyncio.Task | None = None
+    runner: asyncio.Milestone | None = None
+    invocation: asyncio.Milestone | None = None
     active: Turn | None = None
     seen: tuple | None = None
     error: str | None = None
@@ -69,7 +69,7 @@ class ChatRoom(Room):
             state["version"],
             state["phase"],
             state.get("chat_epoch", 0),
-            point.get("task_id"),
+            point.get("milestone_id"),
             point.get("revision"),
         )
 

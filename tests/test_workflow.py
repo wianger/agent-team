@@ -22,7 +22,7 @@ def plan():
         "action": "propose",
         "summary": "Implement and document a function",
         "acceptance_criteria": ["function returns the expected value"],
-        "tasks": [
+        "milestones": [
             {
                 "id": "code",
                 "title": "Implementation",
@@ -64,23 +64,23 @@ class WorkflowTests(unittest.TestCase):
         cloned = self.flow.clone()
         self.assertEqual(cloned.snapshot(), self.flow.snapshot())
         self.assertIs(cloned.config, self.config)
-        cloned.data["proposal"]["tasks"][0]["depends_on"].append("new-dependency")
+        cloned.data["proposal"]["milestones"][0]["depends_on"].append("new-dependency")
         cloned.data["approvals"].clear()
         cloned.members.append("new-member")
-        self.assertEqual(self.flow.data["proposal"]["tasks"][0]["depends_on"], [])
+        self.assertEqual(self.flow.data["proposal"]["milestones"][0]["depends_on"], [])
         self.assertEqual(set(self.flow.data["approvals"]), {"a", "b"})
         self.assertEqual(self.flow.members, ["a", "b"])
 
     def complete_tasks(self):
-        for owner, task_id in (("a", "code"), ("b", "docs")):
-            filename = task_id + ".txt"
+        for owner, milestone_id in (("a", "code"), ("b", "docs")):
+            filename = milestone_id + ".txt"
             (self.config.workspace / filename).write_text("artifact")
             self.flow.apply(
                 owner,
                 {
                     "action": "task_done",
                     "version": 1,
-                    "task_id": task_id,
+                    "milestone_id": milestone_id,
                     "summary": "written",
                     "files": [filename],
                     "tests": "waiting for acceptance",
@@ -92,7 +92,7 @@ class WorkflowTests(unittest.TestCase):
                 {
                     "action": "judge_pass",
                     "version": 1,
-                    "task_id": task_id,
+                    "milestone_id": milestone_id,
                     "revision": self.flow.data["checkpoint"]["revision"],
                     "evidence": "Read the submitted artifact",
                 },
@@ -130,9 +130,9 @@ class WorkflowTests(unittest.TestCase):
 
     def test_invalid_dependencies_and_acceptance_commands_rejected(self):
         for mutate in (
-            lambda p: p["tasks"][0].update(depends_on=["docs"]),
-            lambda p: p["tasks"][0].update(depends_on=["missing"]),
-            lambda p: p["tasks"][0].update(owner="outsider"),
+            lambda p: p["milestones"][0].update(depends_on=["docs"]),
+            lambda p: p["milestones"][0].update(depends_on=["missing"]),
+            lambda p: p["milestones"][0].update(owner="outsider"),
             lambda p: p.update(acceptance_checks=[]),
             lambda p: p.update(acceptance_checks=["echo success"]),
         ):
@@ -147,7 +147,7 @@ class WorkflowTests(unittest.TestCase):
         action = {
             "action": "task_done",
             "version": 1,
-            "task_id": "code",
+            "milestone_id": "code",
             "summary": "done",
             "files": ["not-there.py"],
             "tests": "not tested",
@@ -181,13 +181,15 @@ class WorkflowTests(unittest.TestCase):
             {
                 "action": "review_fail",
                 "version": 1,
-                "task_ids": ["code"],
+                "milestone_ids": ["code"],
                 "evidence": "function broken",
             },
         )
         self.assertEqual(self.flow.phase, "implementation")
         self.assertEqual(self.flow.data["review_approvals"], [])
-        self.assertTrue(all(t["status"] == "pending" for t in self.flow.data["proposal"]["tasks"]))
+        self.assertTrue(
+            all(t["status"] == "pending" for t in self.flow.data["proposal"]["milestones"])
+        )
 
     def test_user_steering_invalidates_plan_and_workspace_change_rejected(self):
         self.agree()
@@ -277,7 +279,7 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.room = Room(self.config, self.store, lambda e: None)
         self.assertEqual(self.room.workflow.phase, "completed")
         self.assertTrue(self.room.manual_paused)
-        self.assertEqual(len(self.room.workflow.data["proposal"]["tasks"]), 2)
+        self.assertEqual(len(self.room.workflow.data["proposal"]["milestones"]), 2)
 
     async def test_failed_and_timed_out_checks_do_not_count_as_success(self):
         results = await run_acceptance_checks(
@@ -405,7 +407,7 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
             "member_a",
             {
                 **plan(),
-                "tasks": [
+                "milestones": [
                     {
                         "id": "T1",
                         "title": "Example",

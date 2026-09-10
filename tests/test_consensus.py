@@ -24,7 +24,7 @@ def proposal(summary="Build a small shared module"):
         "action": "propose",
         "summary": summary,
         "acceptance_criteria": ["The agreed behavior is covered by tests"],
-        "tasks": [
+        "milestones": [
             {
                 "id": "code",
                 "title": "Shared code",
@@ -84,7 +84,7 @@ class RecordTests(unittest.TestCase):
             {
                 "action": "contribute",
                 "version": 1,
-                "task_id": "code",
+                "milestone_id": "code",
                 "ready": False,
                 "summary": "Partial work",
                 "files": ["code.py"],
@@ -100,7 +100,7 @@ class RecordTests(unittest.TestCase):
         base = self.flow.data["revision_base"]
         self.assertEqual(base["checkpoint"]["author"], "a")
         self.assertEqual(
-            base["proposal"]["tasks"][0]["contributions"][0]["summary"], "Partial work"
+            base["proposal"]["milestones"][0]["contributions"][0]["summary"], "Partial work"
         )
         with self.assertRaises(ValueError):
             self.flow.apply("a", {"action": "approve", "version": 1})
@@ -114,7 +114,7 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(second["supersedes"], 1)
         self.assertIn("offline usage", revised.read_text())
         self.assertIn("consensus-v0001.md", revised.read_text())
-        self.assertEqual(self.flow.data["proposal"]["tasks"][0]["status"], "pending")
+        self.assertEqual(self.flow.data["proposal"]["milestones"][0]["status"], "pending")
 
     def test_stale_revision_request_does_not_partly_change_the_plan(self):
         self.record()

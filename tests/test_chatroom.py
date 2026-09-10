@@ -316,8 +316,8 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
         await self.until(lambda: room.reason == "completed" and not room.active, 10)
         final = room.workflow.snapshot()
         self.assertEqual([r["exit_code"] for r in final["acceptance_results"]], [0])
-        for task in final["proposal"]["tasks"]:
-            point = task["contributions"][-1]
+        for milestone in final["proposal"]["milestones"]:
+            point = milestone["contributions"][-1]
             self.assertEqual(
                 {j["speaker"] for j in point["judgments"]}, set(adapters) - {point["author"]}
             )

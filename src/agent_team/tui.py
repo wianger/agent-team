@@ -53,7 +53,7 @@ ACTIONS = {
     "/plan": "Inspect the agreed plan and votes",
     "/consensus": "Read the latest consensus document and document paths",
     "/revise": "Reopen discussion of the consensus; add your requested changes",
-    "/tasks": "Inspect shared milestones and peer judgments",
+    "/milestones": "Inspect shared milestones and peer judgments",
     "/pause": "Let active turns finish, then pause",
     "/resume": "Resume a paused team",
     "/redirect": "Interrupt work and discuss a new direction; add your guidance",
@@ -297,9 +297,9 @@ class RoomView:
                     f"{label} · proposal v{workflow['version']} · "
                     f"{len(workflow.get('approvals', []))}/{total} approved"
                 )
-            tasks = workflow["proposal"]["tasks"]
-            done = sum(t["status"] == "done" for t in tasks)
-            return f"{label} · {done}/{len(tasks)} milestones accepted"
+            milestones = workflow["proposal"]["milestones"]
+            done = sum(t["status"] == "done" for t in milestones)
+            return f"{label} · {done}/{len(milestones)} milestones accepted"
         return label
 
     def guidance(self):
@@ -1086,7 +1086,7 @@ class TeamUI:
             "/help": "help",
             "/plan": "plan",
             "/consensus": "consensus",
-            "/tasks": "plan",
+            "/milestones": "plan",
             "/status": "status",
             "/sessions": "sessions",
         }
@@ -1097,7 +1097,13 @@ class TeamUI:
         self.model.notice = ""
         if text in local_views:
             self.show(local_views[text])
-            if self.connected and text in {"/plan", "/tasks", "/consensus", "/status", "/sessions"}:
+            if self.connected and text in {
+                "/plan",
+                "/milestones",
+                "/consensus",
+                "/status",
+                "/sessions",
+            }:
                 self.pending.put_nowait(text)
         elif text == "/quit":
             self.leave()

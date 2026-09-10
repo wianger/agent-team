@@ -24,7 +24,7 @@ HELP = """Type a message to participate.
 /reset-session [agent]  Forget private session(s), preserving public history; pause
 /plan           Show the current proposal, votes, and acceptance criteria
 /consensus      Inspect the latest approved document and prior versions
-/tasks          Show shared work, contributions, judgments, and checks
+/milestones          Show shared work, contributions, judgments, and checks
 /history [id]   Read a page of 100 messages after this id
 /help           Show help
 /quit           Leave this terminal (Ctrl-D)
@@ -62,7 +62,7 @@ def parse_input(line: str) -> dict | str | None:
         return {"type": "status"}
     if command == "/sessions" and not args:
         return {"type": "sessions"}
-    if command in {"/plan", "/tasks", "/consensus"} and not args:
+    if command in {"/plan", "/milestones", "/consensus"} and not args:
         return {"type": "workflow"}
     if command == "/history" and len(args) <= 1:
         after = int(args[0]) if args else 0
@@ -142,15 +142,15 @@ def describe_workflow(state: dict | None) -> str:
     )
     for speaker, reason in state["objections"].items():
         lines.append(f"Objection · {speaker}: {reason}")
-    for task in proposal["tasks"]:
+    for milestone in proposal["milestones"]:
         lines.append(
-            f"[{task['status']}] {task['id']} · shared · {task['title']} "
-            f"· revision {task.get('revision', 0)}"
+            f"[{milestone['status']}] {milestone['id']} · shared · {milestone['title']} "
+            f"· revision {milestone.get('revision', 0)}"
         )
-        lines.append("  " + task["details"])
-        if task["depends_on"]:
-            lines.append("  Dependencies: " + ", ".join(task["depends_on"]))
-        for contribution in task.get("contributions", []):
+        lines.append("  " + milestone["details"])
+        if milestone["depends_on"]:
+            lines.append("  Dependencies: " + ", ".join(milestone["depends_on"]))
+        for contribution in milestone.get("contributions", []):
             lines.append(
                 f"  r{contribution['revision']} by {contribution['author']}: "
                 + contribution["summary"]
@@ -159,9 +159,9 @@ def describe_workflow(state: dict | None) -> str:
                 lines.append(
                     f"    {judgment['speaker']} · {judgment['action']}: {judgment['evidence']}"
                 )
-        if task["report"]:
-            lines.append("  Files: " + ", ".join(task["report"]["files"]))
-            lines.append("  Checks: " + task["report"]["tests"])
+        if milestone["report"]:
+            lines.append("  Files: " + ", ".join(milestone["report"]["files"]))
+            lines.append("  Checks: " + milestone["report"]["tests"])
     for item in state.get("feedback", []):
         lines.append(f"Feedback · {item['speaker']}: {item['evidence']}")
     lines.append("Integration approvals: " + (", ".join(state["review_approvals"]) or "none"))
