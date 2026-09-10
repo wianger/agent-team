@@ -20,6 +20,8 @@ Reopening the same room restores history **paused**; use `/resume`. The one paus
 
 ## Usage limits
 
+**A room stuck in discussion with no error is usually a protocol failure, not a disagreement.** A member whose replies omit a well-formed `<team-action>` block never votes, so consensus cannot be reached; its peers may read the vote in the message text and believe it counted. Raise that member's `reasoning_effort` first — see [Configuration](configuration.md). The room now says when an action was written as ordinary text, and pauses for you if the same member does it twice.
+
 **Either Claude or Codex reaching its usage limit pauses the entire team.** A reported reset time schedules a recovery check after a 30-second buffer; no fixed 5-hour delay remains. Unknown reset times require `/retry [member]` or `/resume`.
 
 Discussion and work resume only after all limited members pass isolated checks. Codex reset metadata is read through its resident app-server; legacy serial Codex requires manual recovery when no timestamp is available. `/status` shows timing and remaining wait.

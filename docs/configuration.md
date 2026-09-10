@@ -12,9 +12,28 @@ Edit [team.toml](../team.toml) for settings. Per-agent keys are `name`, `backend
 | `turn_timeout`, `work_timeout`, `acceptance_timeout` | Opt-in deadlines in seconds; `0` disables them |
 | `idle_warning_seconds`, `turn_delay` | Inactivity notice interval and per-member delay; defaults are 120 and 0.8 seconds |
 | `proposal_version_limit` | Pause for a human after this many proposals fail to reach consensus; default 5, `0` disables |
-| `reasoning_effort` (per `[[agents]]`, codex only) | Reasoning depth for that agent; omitted, your own `codex` config decides. Codex rejects an unsupported value with the list it accepts |
+| `reasoning_effort` (per `[[agents]]`, codex only) | Reasoning depth for that agent; omitted, your own `codex` config decides. Codex rejects an unsupported value with the list it accepts. **Too low a setting breaks the protocol, not just the quality** — see below |
 
 Generated configuration selects `chatroom` and `full_auto`; older configurations omitting those keys retain `serial` and `phase_scoped`.
+
+## Reasoning effort is a correctness threshold
+
+A member has to end its final reply with a well-formed `<team-action>` block. Below some
+reasoning depth a backend stops doing that reliably, and the room cannot make progress no matter
+how long you leave it.
+
+Measured with `gpt-5.6-luna` on one implementation task, three runs, identical in every other
+respect:
+
+| `reasoning_effort` | Result |
+| --- | --- |
+| `low` | Wrote votes as ordinary text; nothing counted; discussion never ended |
+| `low` (again) | Emitted an unterminated `<team-action>`; the room paused on the error |
+| `medium` | Clean actions throughout; consensus, implementation, judgment, review and acceptance all completed |
+
+So treat `reasoning_effort` as the setting that decides whether a run works at all, and only then
+as a cost control. If a room stalls in discussion, raise it before looking anywhere else. The
+threshold is per model: a stronger model may hold the protocol at a lower setting.
 
 ## Permissions
 
