@@ -365,7 +365,10 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.room.workflow.data["proposal"])
         self.assertEqual((self.workspace / "partial.txt").read_text(), "in progress")
         self.assertFalse(
-            any((m.get("action") or {}).get("action") == "task_done" for m in self.room.messages)
+            any(
+                (m.get("action") or {}).get("action") in {"contribute", "task_done"}
+                for m in self.room.messages
+            )
         )
 
     async def test_failed_acceptance_returns_to_shared_repairs_until_success(self):

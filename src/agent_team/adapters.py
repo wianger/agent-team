@@ -645,8 +645,9 @@ class MockAdapter:
             return action_reply(
                 f"[demo] Wrote {filename}; please judge the actual implementation.",
                 {
-                    "action": "task_done",
+                    "action": "contribute",
                     "version": version,
+                    "ready": True,
                     "milestone_id": milestone["id"],
                     "summary": f"Created {filename}",
                     "files": [filename],

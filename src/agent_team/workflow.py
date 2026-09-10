@@ -539,7 +539,6 @@ def workflow_instructions(workflow: Workflow, speaker: str) -> str:
             f'"milestone_id":"{milestone["id"]}",'
             '"ready":true,"summary":"actual changes and response to feedback",'
             '"files":["existing/relative/path"],"tests":"commands and results, or not run"}.\n'
-            "Legacy task_done means a ready=true checkpoint, not final acceptance.\n"
         )
     elif workflow.phase == "judging":
         point = state["checkpoint"]

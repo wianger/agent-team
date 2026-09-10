@@ -82,7 +82,7 @@ During `implementation`, any member holding the floor can improve the current de
 {"action":"contribute","version":1,"milestone_id":"T1","ready":false,"summary":"Draft interface; please challenge the boundary handling","files":["module.py"],"tests":"Not run; draft only"}
 ```
 
-Use `ready: false` for partial work and `ready: true` to request milestone acceptance. Omitted `ready` defaults to false for `contribute`. The legacy `task_done` action defaults to `ready: true`, but still only submits a checkpoint; it cannot bypass peer judgment.
+Use `ready: false` for partial work and `ready: true` to request milestone acceptance. Omitted `ready` defaults to false for `contribute`. The superseded `task_done` action is still accepted and defaults to `ready: true`, but it is no longer taught to backends; it never bypassed peer judgment. Use `contribute`.
 
 Report actual changes and actual test results honestly. `files` must list existing workspace-relative files, with no absolute paths, parent traversal, or escaping symlinks. The list may be empty for work that only inspects or runs checks. Describe intentional deletions in `summary`.
 
