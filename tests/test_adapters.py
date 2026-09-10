@@ -154,3 +154,21 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(AdapterError) as raised:
             _ = [text async for text in adapter.stream("prompt")]
         self.assertIn("first" + "e" * 300000 + "last", str(raised.exception))
+
+    def test_codex_reasoning_effort_is_passed_through_and_scoped_to_codex(self):
+        agent = AgentConfig("codex", "codex", reasoning_effort="low")
+        command = command_for(agent)
+        self.assertIn('model_reasoning_effort="low"', command)
+        # An override is a -c pair, and must not disturb the approval policy.
+        self.assertEqual(command[command.index('model_reasoning_effort="low"') - 1], "-c")
+        self.assertIn('approval_policy="never"', command)
+        # Omitted, nothing is sent and the user's own codex config decides.
+        self.assertFalse(
+            any("model_reasoning_effort" in arg for arg in command_for(AgentConfig("c", "codex")))
+        )
+        for backend in ("claude", "mock"):
+            with self.subTest(backend=backend), self.assertRaises(ValueError):
+                AgentConfig("x", backend, reasoning_effort="low")
+        for value in ("", 3, True):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                AgentConfig("codex", "codex", reasoning_effort=value)

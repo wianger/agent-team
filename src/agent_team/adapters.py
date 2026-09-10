@@ -156,6 +156,8 @@ def command_for(
             "-c",
             'approval_policy="never"',
         ]
+        if agent.reasoning_effort:
+            command.extend(["-c", f'model_reasoning_effort="{agent.reasoning_effort}"'])
     elif agent.backend == "claude":
         command = [
             "claude",

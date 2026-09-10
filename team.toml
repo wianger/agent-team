@@ -30,3 +30,7 @@ backend = "claude"
 name = "codex"
 backend = "codex"
 # model = "a-model-you-can-access"
+# Codex reasoning depth for this agent, e.g. minimal, low, medium, high, xhigh.
+# Omitted, your own codex config decides, which is usually tuned for one-off chats
+# rather than a team that spends many turns on a single idea.
+# reasoning_effort = "low"

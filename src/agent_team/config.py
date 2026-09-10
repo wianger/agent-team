@@ -20,6 +20,10 @@ class AgentConfig:
     # Optional additional focus; shared responsibilities are always in the team prompt.
     role: str = ""
     model: str | None = None
+    # Codex only: the reasoning depth to run at. Without it Codex uses whatever the
+    # user's own config says, which is usually tuned for interactive work, not for a
+    # team that spends many turns on one idea.
+    reasoning_effort: str | None = None
     command: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -31,6 +35,11 @@ class AgentConfig:
             raise ValueError("role must be a string")
         if self.model is not None and (not isinstance(self.model, str) or not self.model):
             raise ValueError("model must be a nonempty string")
+        if self.reasoning_effort is not None:
+            if not isinstance(self.reasoning_effort, str) or not self.reasoning_effort:
+                raise ValueError("reasoning_effort must be a nonempty string")
+            if self.backend != "codex":
+                raise ValueError("reasoning_effort applies to the codex backend only")
         if not isinstance(self.command, (tuple, list)) or any(
             not isinstance(arg, str) or "\0" in arg for arg in self.command
         ):
@@ -167,4 +176,8 @@ backend = "claude"
 name = "codex"
 backend = "codex"
 # model = "a-model-you-can-access"
+# Codex reasoning depth for this agent, e.g. minimal, low, medium, high, xhigh.
+# Omitted, your own codex config decides, which is usually tuned for one-off chats
+# rather than a team that spends many turns on a single idea.
+# reasoning_effort = "low"
 """

@@ -1,6 +1,6 @@
 # Configuration and safety
 
-Edit [team.toml](../team.toml) for settings. `workflow = "build"` requires at least two agents; `"discussion"` is chat-only and supports one. Add `[[agents]]` entries with unique names to use more agents or different models. Supported backends are `claude`, `codex`, `mock`, and `command`. An optional `role` adds a focus without changing shared responsibilities or permissions.
+Edit [team.toml](../team.toml) for settings. Per-agent keys are `name`, `backend`, `role`, `model`, `reasoning_effort` (codex only), and `command`. `workflow = "build"` requires at least two agents; `"discussion"` is chat-only and supports one. Add `[[agents]]` entries with unique names to use more agents or different models. Supported backends are `claude`, `codex`, `mock`, and `command`. An optional `role` adds a focus without changing shared responsibilities or permissions.
 
 ## Settings
 
@@ -12,6 +12,7 @@ Edit [team.toml](../team.toml) for settings. `workflow = "build"` requires at le
 | `turn_timeout`, `work_timeout`, `acceptance_timeout` | Opt-in deadlines in seconds; `0` disables them |
 | `idle_warning_seconds`, `turn_delay` | Inactivity notice interval and per-member delay; defaults are 120 and 0.8 seconds |
 | `proposal_version_limit` | Pause for a human after this many proposals fail to reach consensus; default 5, `0` disables |
+| `reasoning_effort` (per `[[agents]]`, codex only) | Reasoning depth for that agent; omitted, your own `codex` config decides. Codex rejects an unsupported value with the list it accepts |
 
 Generated configuration selects `chatroom` and `full_auto`; older configurations omitting those keys retain `serial` and `phase_scoped`.
 

@@ -208,9 +208,17 @@ class CodexResident(JsonProcess):
         self.result_session_id = None
         try:
             if not self.process:
-                await self.start_process(
-                    ["codex", "app-server", "--listen", "stdio://", "-c", 'approval_policy="never"']
-                )
+                launch = [
+                    "codex",
+                    "app-server",
+                    "--listen",
+                    "stdio://",
+                    "-c",
+                    'approval_policy="never"',
+                ]
+                if self.agent.reasoning_effort:
+                    launch.extend(["-c", f'model_reasoning_effort="{self.agent.reasoning_effort}"'])
+                await self.start_process(launch)
                 await self.request(
                     "initialize",
                     {"clientInfo": {"name": "agent_team", "version": "0.1.0"}},
