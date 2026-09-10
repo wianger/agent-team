@@ -23,10 +23,10 @@ from .consensus import write_consensus
 from .context import PASS, build_prompt
 from .sessions import Sessions
 from .store import Store
-from .workflow import Workflow, parse_action
+from .workflow import Workflow, parse_action, unwrapped_action
 
 # Pauses a human must resolve, as opposed to ones they chose.
-PAUSED_FOR_INPUT = {"stalled", "blocked", "error", "document_error", "no_consensus"}
+PAUSED_FOR_INPUT = {"stalled", "blocked", "error", "document_error", "no_consensus", "protocol"}
 
 QUOTA_RESET_BUFFER_SECONDS = 30
 QUOTA_PROBE_PROMPT = (
@@ -78,6 +78,7 @@ class Room:
         self.single_step = False
         self.document_versions: set[int] = set()
         self.document_error: str | None = None
+        self.protocol_lapses: dict[str, int] = {}
         self.quotas: dict[str, dict] = {}
         self.quota_retries: set[str] = set()
         self.quota_timer: asyncio.TimerHandle | None = None
@@ -164,6 +165,33 @@ class Room:
             )
         )
         self.wake.set()
+
+    def note_protocol_lapse(self, speaker: str, text: str, action: dict | None) -> None:
+        """Catch a member writing actions as prose, which silently never count.
+
+        Discussion accepts plain talk, so an unparsed action cannot simply be refused
+        the way formal work is. Left alone it deadlocks the room: the author believes
+        it voted, its peers read the vote in the text and believe consensus, and the
+        coordinator recorded nothing.
+        """
+        if action is not None:
+            self.protocol_lapses.pop(speaker, None)
+            return
+        if not self.workflow or not unwrapped_action(text):
+            return
+        count = self.protocol_lapses[speaker] = self.protocol_lapses.get(speaker, 0) + 1
+        if count < 2:
+            self.publish_system(
+                f"{speaker} wrote an action as ordinary text, so it was not counted. "
+                "End your final reply with <team-action>{...}</team-action>."
+            )
+            return
+        self.manual_paused, self.reason = True, "protocol"
+        self.publish_system(
+            f"{speaker} has written {count} actions as ordinary text rather than "
+            "<team-action> blocks, so none of them counted and the room cannot "
+            "progress. Steer with /revise, or use a backend that honours the protocol."
+        )
 
     def quota_blocked(self, name: str) -> bool:
         return name in self.quotas and name not in self.quota_retries
@@ -608,6 +636,7 @@ class Room:
                 self.emit(
                     "workflow.changed", durable=False, text=note, workflow=candidate.snapshot()
                 )
+            self.note_protocol_lapse(speaker, reply, action)
             self.ensure_consensus_documents()
 
     async def run_acceptance(

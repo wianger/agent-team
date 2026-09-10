@@ -649,6 +649,8 @@ class ChatRoom(Room):
             self.manual_paused, self.reason = True, "blocked"
         if note.startswith("stalled:"):
             self.manual_paused, self.reason = True, "stalled"
+        if turn.lane != "work" or turn.phase == "discussion":
+            self.note_protocol_lapse(turn.speaker, reply, action)
         if note or rejected:
             self.emit(
                 "workflow.changed",

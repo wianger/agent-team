@@ -38,6 +38,18 @@ def visible_text(text: str) -> str:
     return text.rstrip()
 
 
+UNWRAPPED_ACTION = re.compile(r'\{\s*"action"\s*:\s*"')
+
+
+def unwrapped_action(text: str) -> bool:
+    """True when a reply carries a bare action object outside a <team-action> block.
+
+    Such a reply reads as an ordinary message, so the vote or checkpoint it intends
+    never reaches the coordinator, and its author has no way to notice.
+    """
+    return bool(UNWRAPPED_ACTION.search(text))
+
+
 def parse_action(reply: str) -> tuple[str, dict | None]:
     blocks = list(re.finditer(r"<team-action>(.*?)</team-action>", reply, re.DOTALL))
     if not blocks:

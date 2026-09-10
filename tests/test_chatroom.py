@@ -522,3 +522,44 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
         await self.until(lambda: room.turns == 1)
         await asyncio.wait_for(room.close(), 1)
         self.assertTrue(room.closed)
+
+    async def test_actions_written_as_prose_are_corrected_then_escalated(self):
+        """Reproduces the live deadlock: a member votes in plain text, so nothing counts,
+        while its peer reads the vote in that text and believes consensus was reached."""
+        prose_vote = 'I agree. {"action":"approve","version":1}'
+        a = Scripted(prose_vote, prose_vote, "[[PASS]]")
+        b = Scripted("[[PASS]]", "[[PASS]]", "[[PASS]]")
+        config = replace(
+            demo_config(),
+            workspace=self.path,
+            interaction_mode="chatroom",
+            turn_delay=0,
+            agents=(AgentConfig("a", "mock"), AgentConfig("b", "mock")),
+        )
+        room = self.start({"a": a, "b": b}, config)
+        _, proposal = parse_action(
+            MockAdapter(config.agents[0], self.path).workflow_reply(room.workflow.snapshot())
+        )
+        room.workflow.apply("b", proposal)
+        room.publish_system("b proposed the fixture plan")
+
+        await self.until(lambda: room.protocol_lapses.get("a", 0) >= 1)
+        # The vote never counted, so consensus cannot have been recorded.
+        self.assertNotIn("a", room.workflow.data["approvals"])
+        self.assertTrue(
+            any("not counted" in m["text"] for m in room.messages),
+            "the room must say the action did not count",
+        )
+
+        # A second lapse is not a mistake to correct but a member that cannot vote.
+        await self.until(lambda: room.reason == "protocol")
+        self.assertTrue(room.manual_paused)
+        self.assertEqual(room.room_state(), "paused_for_input")
+        await room.close()
+
+    async def test_a_valid_action_clears_an_earlier_lapse(self):
+        room = self.start({"a": Scripted("[[PASS]]"), "b": Scripted("[[PASS]]")})
+        room.protocol_lapses["a"] = 1
+        room.note_protocol_lapse("a", "fine by me", {"action": "approve", "version": 1})
+        self.assertNotIn("a", room.protocol_lapses)
+        await room.close()

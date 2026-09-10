@@ -297,10 +297,14 @@ class RoomView:
         if workflow.get("proposal"):
             total = len(self.state.get("agents", []))
             if workflow["phase"] == "discussion":
-                return (
-                    f"{label} · proposal v{workflow['version']} · "
-                    f"{len(workflow.get('approvals', []))}/{total} approved"
+                approvals = workflow.get("approvals", [])
+                # Naming who is outstanding is the actionable part: a member that
+                # never votes stalls the room, and a count alone does not say who.
+                waiting = [m for m in workflow.get("members", []) if m not in approvals]
+                text = (
+                    f"{label} · proposal v{workflow['version']} · {len(approvals)}/{total} approved"
                 )
+                return text + (" · awaiting " + ", ".join(waiting) if waiting else "")
             milestones = workflow["proposal"]["milestones"]
             done = sum(t["status"] == "done" for t in milestones)
             return f"{label} · {done}/{len(milestones)} milestones accepted"

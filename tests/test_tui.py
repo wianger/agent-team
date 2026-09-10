@@ -1170,3 +1170,19 @@ class LiveRoomTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_standing_proposal_names_the_members_yet_to_approve(self):
+        config = demo_config()
+        first, second = (a.name for a in config.agents)
+        snapshot = Workflow(config).snapshot()
+        snapshot.update(
+            version=1,
+            approvals=[first],
+            proposal={"summary": "s", "milestones": [], "acceptance_checks": [["true"]]},
+        )
+        self.view.handle(welcome(reason="running", paused=False, messages=3, workflow=snapshot))
+        text = self.view.phase()
+        self.assertIn("proposal v1", text)
+        self.assertIn("1/2 approved", text)
+        # The proposer approved by proposing; the other member is the one to chase.
+        self.assertIn("awaiting " + second, text)
