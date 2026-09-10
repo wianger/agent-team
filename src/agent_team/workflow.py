@@ -301,7 +301,7 @@ class Workflow:
             reason = nonempty(action.get("reason"), "reason")
             self.reconsider(speaker=speaker, reason=reason)
             return (
-                f"{speaker} requests a revised agreement: {reason}. "
+                f"{speaker} requests a revised proposal: {reason}. "
                 "Discuss and approve a new version."
             )
         if self.phase == "discussion" and kind in {"approve", "object"}:
@@ -316,7 +316,7 @@ class Workflow:
                 self.data["approvals"].append(speaker)
             if set(self.data["approvals"]) == set(self.members) and not self.data["objections"]:
                 self.data["phase"] = "implementation"
-                return "Unanimous agreement. Begin shared implementation with peer judgment."
+                return "Consensus reached. Begin shared implementation with peer judgment."
             return f"{speaker} approves proposal v{self.data['version']}."
         if self.phase == "implementation" and kind in {"contribute", "task_done"}:
             return self.contribute(speaker, action)
@@ -464,13 +464,13 @@ def workflow_instructions(workflow: Workflow, speaker: str) -> str:
         "implementation, and they must judge yours. Respond to critiques with evidence.\n"
         "Preserve existing edits. No unrelated deletions, git resets, commits, pushes, or deploys. "
         "Do not modify .agent-team data. Inspect interrupted work before continuing.\n"
-        "Every confirmed agreement is saved by the coordinator as a versioned Markdown document "
+        "Every consensus is saved by the coordinator as a versioned Markdown document "
         "under docs/agent-team. Do not edit generated consensus records or ask a peer to write "
         "them. The current workflow and consensus_history identify approved versions.\n"
-        "Agreements are revisable, not permanent. If new evidence requires changing the agreed "
+        "Consensus is revisable, not permanent. If new evidence requires changing the agreed "
         "scope or approach, request a new discussion within the user's authorized scope: "
         f'{{"action":"request_revision","version":{version},"reason":"specific new evidence"}}. '
-        "This stops current work, preserves the previous agreement and files, and requires "
+        "This stops current work, preserves the previous consensus and files, and requires "
         "fresh unanimous approval of a new proposal. "
         "During discussion, propose or object instead.\n"
         "Explain your reasoning to the team. End your FINAL reply with one "
@@ -495,7 +495,7 @@ def workflow_instructions(workflow: Workflow, speaker: str) -> str:
             "actually executes these argv arrays after reviews; an echo is not a check.\n"
             f'Approve: {{"action":"approve","version":{version}}}; '
             f'object: {{"action":"object","version":{version},"reason":"specific issue"}}.\n'
-            "Ordinary discussion can omit an action. Textual agreement or [[PASS]] is not a vote.\n"
+            "Ordinary discussion can omit an action. Agreeing in prose or [[PASS]] is not a vote.\n"
         )
     elif workflow.phase == "implementation":
         task = workflow.current_task()

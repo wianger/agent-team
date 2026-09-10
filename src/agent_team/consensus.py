@@ -80,7 +80,7 @@ def render_consensus(record: dict) -> str:
             json.dumps(proposal["checks"], ensure_ascii=False, indent=2),
             "```",
             "",
-            "## Revising this agreement",
+            "## Revising this consensus",
             "",
             "Continue discussing in the room. Use `/revise <guidance>` to reopen planning, "
             "or let a member submit a versioned `request_revision` action. "
@@ -88,7 +88,7 @@ def render_consensus(record: dict) -> str:
             "the next proposal requires fresh approval from every member before work continues.",
             "",
             "This file is coordinator-generated. Do not edit it to change the team's instructions. "
-            "A revised agreement produces a new document; "
+            "A revised proposal produces a new document; "
             "the durable public workflow is authoritative.",
             "",
         ]

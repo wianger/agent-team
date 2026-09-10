@@ -359,11 +359,11 @@ class PresentationTests(unittest.TestCase):
     def test_compact_transcript_distinguishes_humans_agents_and_system_messages(self):
         self.view.handle(message(1, "Keep it local.", speaker="user", role="user"))
         self.view.handle(message(2, "Use a local database.\n\nPreserve the input text."))
-        self.view.handle(message(3, "Agreement recorded.", speaker="system", role="system"))
+        self.view.handle(message(3, "Consensus recorded.", speaker="system", role="system"))
         text = self.view.page("conversation").text
         self.assertIn("❯ You · user\n    Keep it local.", text)
         self.assertIn("● member_a\n    Use a local database.\n\n    Preserve", text)
-        self.assertIn("· Team\n    Agreement recorded.", text)
+        self.assertIn("· Team\n    Consensus recorded.", text)
         self.assertNotIn("\n\n\n", text)
 
     def test_live_labels_describe_chat_and_review_without_implying_write_authority(self):

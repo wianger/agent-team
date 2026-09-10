@@ -448,7 +448,7 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
             any(e["type"] == "turn.started" and e["phase"] == "implementation" for e in self.events)
         )
 
-    async def test_failure_does_not_finalize_a_pending_unanimous_agreement(self):
+    async def test_failure_does_not_finalize_a_pending_consensus(self):
         failure_gate, approval_gate = asyncio.Event(), asyncio.Event()
         approval = action_reply("Agreed", {"action": "approve", "version": 1})
         a = Scripted(approval, (failure_gate, AdapterError("Malformed transport")))
@@ -469,7 +469,7 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
         await self.until(
             lambda: "a" in room.workflow.data["approvals"] and not room.members["a"].active
         )
-        room.say("human", "Check another edge case before confirming agreement")
+        room.say("human", "Check another edge case before confirming consensus")
         await self.until(lambda: len(a.calls) == 2 and b.calls)
         approval_gate.set()
         await self.until(lambda: set(room.workflow.data["approvals"]) == {"a", "b"})

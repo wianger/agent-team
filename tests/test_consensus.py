@@ -310,7 +310,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.room.workflow.data["consensus_history"], [record])
         self.assertEqual((self.path / record["document"]).read_text(), render_consensus(record))
 
-    async def test_pause_allows_pending_agreement_to_be_documented_but_not_implemented(self):
+    async def test_pause_allows_pending_consensus_to_be_documented_but_not_implemented(self):
         gate = asyncio.Event()
         entered = []
 
@@ -342,7 +342,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
             (self.path / self.room.workflow.data["consensus_history"][0]["document"]).exists()
         )
 
-    async def test_migrates_legacy_agreements_even_when_the_latest_state_is_discussion(self):
+    async def test_migrates_legacy_consensus_even_when_the_latest_state_is_discussion(self):
         flow = Workflow(self.config)
 
         def save_legacy(text):
@@ -356,11 +356,11 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
                 saved.pop(key)
             self.store.append("message", role="system", speaker="system", text=text, workflow=saved)
 
-        agree(flow, "First agreement")
-        save_legacy("First agreement reached")
+        agree(flow, "First proposal")
+        save_legacy("First proposal reached")
         flow.reconsider()
-        agree(flow, "Second agreement")
-        save_legacy("Second agreement reached")
+        agree(flow, "Second proposal")
+        save_legacy("Second proposal reached")
         flow.reconsider()
         save_legacy("Reopen discussion")
         self.room = ChatRoom(self.config, self.store, self.events.append)
@@ -369,7 +369,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([r["version"] for r in history], [1, 2])
         self.assertTrue(all(r["recovered"] for r in history))
         self.assertEqual(
-            self.room.workflow.data["revision_base"]["proposal"]["summary"], "Second agreement"
+            self.room.workflow.data["revision_base"]["proposal"]["summary"], "Second proposal"
         )
         self.assertEqual(self.room.workflow.phase, "discussion")
         self.assertTrue(self.room.manual_paused)
@@ -446,7 +446,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.room.workflow.data["revision_request"]["speaker"], "b")
         self.assertEqual(len(self.room.workflow.data["consensus_history"]), 1)
 
-    async def test_stale_chat_revision_is_rejected_and_plain_chat_keeps_the_agreement(self):
+    async def test_stale_chat_revision_is_rejected_and_plain_chat_keeps_the_consensus(self):
         self.room = ChatRoom(self.config, self.store, self.events.append)
         agree(self.room.workflow)
         record = self.room.workflow.confirm_consensus()

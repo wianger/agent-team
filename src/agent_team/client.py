@@ -17,7 +17,7 @@ HELP = """Type a message to participate.
 /resume         Continue automatically, without a round limit
 /retry [agent]  Retry one unavailable member, or all unavailable members
 /redirect text  Interrupt active work and reopen discussion with new guidance
-/revise text    Revisit the agreement, preserving documents and existing work
+/revise text    Revisit the consensus, preserving documents and existing work
 /next [agent]   Advance exactly one eligible agent turn
 /status         Show active thinkers, the writer, and completed turn count
 /sessions       Show private session IDs and public-message synchronization

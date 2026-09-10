@@ -265,7 +265,7 @@ class ChatRoom(Room):
             return
         if self.failed_members():
             self.manual_paused, self.reason = True, "error"
-            return  # Do not finalize agreement or schedule work until an explicit retry.
+            return  # Do not finalize consensus or schedule work until an explicit retry.
         if self.quotas:
             if not self.manual_paused:
                 self.reason = "quota"
@@ -300,7 +300,7 @@ class ChatRoom(Room):
                     "message",
                     role="system",
                     speaker="system",
-                    text=f"Unanimous agreement confirmed. Consensus v{record['version']}: "
+                    text=f"Consensus reached. Consensus v{record['version']}: "
                     f"{record['document']}. Shared implementation follows document publication.",
                     workflow=candidate.snapshot(),
                 )

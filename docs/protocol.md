@@ -24,7 +24,7 @@ New public messages are retained for every worker. This implementation synchroni
 
 Formal work uses a generation fence: room revision, proposal version, phase, decision epoch, and checkpoint identity/revision. New proposals, objections, checkpoints, and requested repairs invalidate older formal decisions. Late concurrent actions are stored as `rejected_action` plus `rejection`; they never alter the workflow, and the member can synchronize and reconsider. Duplicate approvals do not generate feedback loops. Unanimous discussion remains in `discussion` until outstanding formal discussion completes, then a durable system message records the transition to implementation.
 
-Discussion and eligible formal reviews can run concurrently. Writers/checks wait for all formal readers, including stale readers, to finish. Only one writer/check runner holds the lease. Other members may use the conversation-only `chat` lane while work proceeds; its output cannot approve or judge, and members are instructed not to modify files. Full-auto chat may use tools for research and may request a new discussion of the agreement as described below. Informal observations of changing files are not stable-snapshot review evidence. Custom backends must honor the workflow scope themselves; native permissions follow the configured mode described above. Do not leave background writers running beyond a checkpoint.
+Discussion and eligible formal reviews can run concurrently. Writers/checks wait for all formal readers, including stale readers, to finish. Only one writer/check runner holds the lease. Other members may use the conversation-only `chat` lane while work proceeds; its output cannot approve or judge, and members are instructed not to modify files. Full-auto chat may use tools for research and may request a new discussion of the consensus as described below. Informal observations of changing files are not stable-snapshot review evidence. Custom backends must honor the workflow scope themselves; native permissions follow the configured mode described above. Do not leave background writers running beyond a checkpoint.
 
 ## Proposal and consensus
 
@@ -62,7 +62,7 @@ The coordinator publishes a complete file using create-only atomic linking and r
 
 On restart, missing approved files are rebuilt from the database. Legacy unanimous workflows can be recovered from historical messages even when the latest phase is discussion; recovery is additive, records its migration time honestly, and stays paused. The current workflow remains authoritative if a file has been externally edited or publication is pending.
 
-A member can request reopening the agreement after discussion, from a formal turn or a conversation-only lane:
+A member can request reopening the consensus after discussion, from a formal turn or a conversation-only lane:
 
 ```json
 {"action":"request_revision","version":1,"reason":"New evidence requires changing the storage approach"}

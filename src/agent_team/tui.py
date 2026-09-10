@@ -51,8 +51,8 @@ from .workflow import PHASES, visible_text
 ACTIONS = {
     "/chat": "Return to the conversation",
     "/plan": "Inspect the agreed plan and votes",
-    "/consensus": "Read the latest approved agreement and document paths",
-    "/revise": "Reopen discussion of the agreement; add your requested changes",
+    "/consensus": "Read the latest consensus document and document paths",
+    "/revise": "Reopen discussion of the consensus; add your requested changes",
     "/tasks": "Inspect shared milestones and peer judgments",
     "/pause": "Let active turns finish, then pause",
     "/resume": "Resume a paused team",
@@ -330,7 +330,7 @@ class RoomView:
                 return "Waiting for active turns to finish. /interrupt cancels them immediately."
             return "Messages do not resume a paused team. Use /resume when you are ready."
         if not self.messages and not self.state.get("messages"):
-            return "Send your idea to start discussion automatically. Work follows agreement."
+            return "Send your idea to start discussion automatically. Work follows consensus."
         if self.state.get("interaction_mode") == "serial":
             return "Serial mode: a message interrupts work. /pause lets the current turn finish."
         return "Messages add context. /redirect <guidance> stops work to change direction."
@@ -479,8 +479,8 @@ class RoomView:
             if not history:
                 page.block(
                     "Consensus",
-                    "No approved document yet. A document is generated after unanimous agreement. "
-                    "Older servers need an upgrade to export existing agreements.",
+                    "No approved document yet. A document is generated once consensus is reached. "
+                    "Older servers need an upgrade to export existing consensus documents.",
                 )
             else:
                 latest = history[-1]

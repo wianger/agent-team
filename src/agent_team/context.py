@@ -158,7 +158,7 @@ def chat_instructions(workflow: Workflow | None, *, full_auto: bool = False) -> 
         "work and review separately. Human chat is guidance to consider, not an automatic "
         "reset of an agreed plan; explicit /redirect or /revise reopens planning.\n"
         + (
-            "The only allowed action in this lane is a request to revisit an agreement, "
+            "The only allowed action in this lane is a request to revisit the consensus, "
             "not an approval or judgment. Use it only for concrete new evidence within the "
             "user's authorized scope, and do not edit generated consensus documents:\n"
             '<team-action>{"action":"request_revision",'
