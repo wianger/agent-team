@@ -596,6 +596,10 @@ def workflow_instructions(workflow: Workflow, speaker: str) -> str:
             f'"revision":{point["revision"]},"evidence":"specific inspection and reasoning"}}.\n'
             "Use judge_fail with the same fields to request changes. Judge the actual readiness "
             "claim: a good partial draft may pass without completing the milestone.\n"
+            "Tests are part of the work, not a courtesy. Name which of the proposal's acceptance "
+            "criteria this checkpoint's tests actually exercise, and which they leave uncovered. "
+            "Code you believe correct, whose tests would not catch a regression in an agreed "
+            "criterion, is a judge_fail with the missing cases named.\n"
         )
     else:
         instructions = (
@@ -603,6 +607,9 @@ def workflow_instructions(workflow: Workflow, speaker: str) -> str:
             "milestones. Individual judgments do not replace this final integration review.\n"
             "Read-only turn: report issues rather than modifying files. All members review before "
             "the coordinator runs the agreed checks.\n"
+            "Check coverage across the whole proposal: name any acceptance criterion that no test "
+            "exercises. The agreed checks passing is not evidence of coverage, because a thin "
+            "suite passes them exactly as readily as a thorough one.\n"
             f'Pass: {{"action":"review_pass","version":{version},"evidence":"files inspected"}}.\n'
             f'Request repairs: {{"action":"review_fail","version":{version},"milestone_ids":["T1"],'
             '"evidence":"specific defect, location, and requested improvement"}.\n'

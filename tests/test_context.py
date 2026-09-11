@@ -79,3 +79,58 @@ class SharedResponsibilityTests(unittest.TestCase):
         self.assertIn(SHARED_RESPONSIBILITIES, prompt)
         self.assertIn("Optional additional focus: Check accessibility.", prompt)
         self.assertTrue(prompt.endswith("[]"))
+
+
+class CoverageReviewTests(unittest.TestCase):
+    """Peer judgment confirmed correctness in every observed run and never once asked
+    whether the work was tested, so the room shipped thinner suites than a solo agent."""
+
+    def setUp(self):
+        self.config = TeamConfig(
+            agents=(AgentConfig("claude", "claude"), AgentConfig("codex", "codex"))
+        )
+        self.messages = [{"id": 1, "role": "user", "speaker": "human", "text": "Build"}]
+
+    def flow(self, phase):
+        flow = Workflow(self.config)
+        flow.data.update(
+            phase=phase,
+            version=1,
+            proposal={
+                "summary": "s",
+                "acceptance_criteria": ["observable outcome"],
+                "milestones": [
+                    {
+                        "id": "T1",
+                        "title": "t",
+                        "details": "d",
+                        "owner": None,
+                        "depends_on": [],
+                        "status": "judging",
+                        "report": None,
+                        "revision": 1,
+                        "contributions": [],
+                    }
+                ],
+                "acceptance_checks": [["true"]],
+            },
+            checkpoint={"author": "codex", "milestone_id": "T1", "revision": 1, "approvals": []},
+        )
+        return flow
+
+    def test_judgment_must_name_covered_and_uncovered_criteria(self):
+        prompt = build_prompt(
+            self.config.agents[0], self.config, self.messages, self.flow("judging")
+        )
+        self.assertIn("acceptance criteria this checkpoint's tests actually exercise", prompt)
+        self.assertIn("uncovered", prompt)
+        # Correct code with inadequate tests must be a rejection, not a pass.
+        self.assertIn("judge_fail with the missing cases named", prompt)
+
+    def test_integration_review_checks_coverage_across_the_proposal(self):
+        prompt = build_prompt(
+            self.config.agents[0], self.config, self.messages, self.flow("review")
+        )
+        self.assertIn("name any acceptance criterion that no test", prompt)
+        # Passing the agreed checks must not be mistaken for coverage.
+        self.assertIn("thin suite passes them", prompt)
