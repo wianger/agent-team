@@ -56,9 +56,10 @@ def parse_action(reply: str) -> tuple[str, dict | None]:
         if ACTION_START in reply:
             raise ValueError("Incomplete team-action block")
         return reply, None
+    # The last block is the action, so anything after it cannot change what was meant.
+    # Members routinely sign off with a closing sentence, and refusing the turn for that
+    # pauses the whole room over output whose intent is unambiguous.
     block = blocks[-1]
-    if reply[block.end() :].strip():
-        raise ValueError("team-action must end the final reply")
     action = json.loads(block.group(1))
     if not isinstance(action, dict) or not isinstance(action.get("action"), str):
         raise ValueError("team-action must be a JSON object with an action string")

@@ -98,6 +98,26 @@ class WorkflowTests(unittest.TestCase):
                 },
             )
 
+    def test_a_closing_remark_after_the_action_does_not_fail_the_turn(self):
+        """A sign-off after the action used to abort the run and pause the whole room,
+        though the last block is the action and trailing text cannot change it."""
+        action = '<team-action>{"action":"approve","version":1}</team-action>'
+        text, parsed = parse_action("Looks right.\n" + action + "\n\nLet me know if you disagree.")
+        self.assertEqual(parsed, {"action": "approve", "version": 1})
+        # The remainder is protocol noise and must stay out of the committed message.
+        self.assertEqual(text, "Looks right.")
+
+    def test_the_last_block_is_the_action_and_malformed_blocks_still_fail(self):
+        _, parsed = parse_action(
+            '<team-action>{"action":"object","version":1,"reason":"r"}</team-action> then '
+            '<team-action>{"action":"approve","version":1}</team-action>'
+        )
+        self.assertEqual(parsed["action"], "approve")
+        with self.assertRaises(ValueError):
+            parse_action('text <team-action>{"action":"approve"}')
+        with self.assertRaises(ValueError):
+            parse_action("<team-action>[1,2]</team-action>")
+
     def test_proposing_approves_it_and_every_other_member_must_approve_explicitly(self):
         self.flow.apply("a", plan())
         self.assertEqual(self.flow.data["approvals"], ["a"])
