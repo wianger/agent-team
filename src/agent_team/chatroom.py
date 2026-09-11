@@ -410,9 +410,9 @@ class ChatRoom(Room):
                         self.cancel_active(exclude=turn.turn_id)
                         self.emit("error", speaker=name, turn_id=turn.turn_id, text=member.error)
                         self.publish_system(
-                            f"{name} sent actions that could not be accepted twice in a row "
-                            f"({member.error}). The team is paused; steer with /revise or use a "
-                            "backend that honours the protocol."
+                            f"{name} sent {self.protocol_lapses.get(name, 0)} actions in a row "
+                            f"that could not be accepted ({member.error}). The team is paused; "
+                            "steer with /revise or use a backend that honours the protocol."
                         )
             except Exception as exc:
                 if not self.closed and (

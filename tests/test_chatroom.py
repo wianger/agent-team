@@ -10,6 +10,7 @@ from pathlib import Path
 
 from agent_team.adapters import AdapterError, MockAdapter
 from agent_team.chatroom import ChatRoom
+from agent_team.engine import PROTOCOL_LAPSE_LIMIT
 from agent_team.config import AgentConfig, TeamConfig, demo_config
 from agent_team.context import DELTA_MARKER, PASS, TRANSCRIPT_MARKER
 from agent_team.store import Store
@@ -527,7 +528,7 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
         """Reproduces the live deadlock: a member votes in plain text, so nothing counts,
         while its peer reads the vote in that text and believes consensus was reached."""
         prose_vote = 'I agree. {"action":"approve","version":1}'
-        a = Scripted(prose_vote, prose_vote, "[[PASS]]")
+        a = Scripted(*([prose_vote] * PROTOCOL_LAPSE_LIMIT), "[[PASS]]")
         b = Scripted("[[PASS]]", "[[PASS]]", "[[PASS]]")
         config = replace(
             demo_config(),
@@ -551,7 +552,7 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
             "the room must say the action did not count",
         )
 
-        # A second lapse is not a mistake to correct but a member that cannot vote.
+        # Repeated lapses are not mistakes to correct but a member that cannot vote.
         await self.until(lambda: room.reason == "protocol")
         self.assertTrue(room.manual_paused)
         self.assertEqual(room.room_state(), "paused_for_input")
@@ -570,8 +571,9 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
         The end-to-end path is covered by test_sessions; this pins the policy."""
         room = self.start({"a": Scripted("[[PASS]]"), "b": Scripted("[[PASS]]")})
 
-        self.assertFalse(room.note_invalid_action("a", "evidence must be nonempty text"))
-        self.assertEqual(room.protocol_lapses["a"], 1)
+        for _ in range(PROTOCOL_LAPSE_LIMIT - 1):
+            self.assertFalse(room.note_invalid_action("a", "evidence must be nonempty text"))
+        self.assertEqual(room.protocol_lapses["a"], PROTOCOL_LAPSE_LIMIT - 1)
         self.assertTrue(
             any("was not accepted" in m["text"] for m in room.messages),
             "the author must be told what to send instead",

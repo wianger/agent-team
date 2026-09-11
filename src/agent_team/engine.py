@@ -25,6 +25,11 @@ from .sessions import Sessions
 from .store import Store
 from .workflow import InvalidAction, Workflow, parse_action, unwrapped_action
 
+# Consecutive rejected actions from one member before the room stops and asks a human.
+# Real backends lapse more than once in a discussion, in more than one way, so a single
+# correction loses runs that would have recovered on the next turn.
+PROTOCOL_LAPSE_LIMIT = 3
+
 # Pauses a human must resolve, as opposed to ones they chose.
 PAUSED_FOR_INPUT = {"stalled", "blocked", "error", "document_error", "no_consensus", "protocol"}
 
@@ -180,7 +185,7 @@ class Room:
         if not self.workflow or not unwrapped_action(text):
             return
         count = self.protocol_lapses[speaker] = self.protocol_lapses.get(speaker, 0) + 1
-        if count < 2:
+        if count < PROTOCOL_LAPSE_LIMIT:
             self.publish_system(
                 f"{speaker} wrote an action as ordinary text, so it was not counted. "
                 "End your final reply with <team-action>{...}</team-action>."
@@ -201,7 +206,7 @@ class Room:
         room built over a field the author would have fixed on request.
         """
         count = self.protocol_lapses[speaker] = self.protocol_lapses.get(speaker, 0) + 1
-        if count >= 2:
+        if count >= PROTOCOL_LAPSE_LIMIT:
             return True
         self.publish_system(
             f"{speaker}'s action was not accepted: {detail}. Nothing was recorded and the "
