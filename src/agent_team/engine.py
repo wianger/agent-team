@@ -23,7 +23,7 @@ from .consensus import write_consensus
 from .context import PASS, build_prompt
 from .sessions import Sessions
 from .store import Store
-from .workflow import Workflow, parse_action, unwrapped_action
+from .workflow import InvalidAction, Workflow, parse_action, unwrapped_action
 
 # Pauses a human must resolve, as opposed to ones they chose.
 PAUSED_FOR_INPUT = {"stalled", "blocked", "error", "document_error", "no_consensus", "protocol"}
@@ -192,6 +192,22 @@ class Room:
             "<team-action> blocks, so none of them counted and the room cannot "
             "progress. Steer with /revise, or use a backend that honours the protocol."
         )
+
+    def note_invalid_action(self, speaker: str, detail: str) -> bool:
+        """Report a malformed action back to its author. True when it should escalate.
+
+        The validation message is already precise enough to act on, and the member is
+        the one who can act on it. Ending the run instead throws away everything the
+        room built over a field the author would have fixed on request.
+        """
+        count = self.protocol_lapses[speaker] = self.protocol_lapses.get(speaker, 0) + 1
+        if count >= 2:
+            return True
+        self.publish_system(
+            f"{speaker}'s action was not accepted: {detail}. Nothing was recorded and the "
+            "rest of the room is unchanged. Send the corrected action."
+        )
+        return False
 
     def quota_blocked(self, name: str) -> bool:
         return name in self.quotas and name not in self.quota_retries
@@ -809,6 +825,12 @@ class Room:
             except asyncio.CancelledError:
                 # User steering invalidates this turn, not the coordinator itself.
                 pass
+            except InvalidAction as exc:
+                if not self.closed and revision == self.revision:
+                    outcome = "failed"
+                    if self.note_invalid_action(name, str(exc)):
+                        self.manual_paused, self.reason = True, "error"
+                        self.emit("error", speaker=name, turn_id=turn_id, text=str(exc))
             except Exception as exc:
                 if not self.closed and (
                     revision == self.revision or isinstance(exc, QuotaExceeded)

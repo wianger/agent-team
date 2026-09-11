@@ -38,6 +38,14 @@ def visible_text(text: str) -> str:
     return text.rstrip()
 
 
+class InvalidAction(ValueError):
+    """A member's action could not be accepted as written.
+
+    Distinct from other ValueErrors raised during a turn, such as session integrity
+    failures, because this one is the member's to correct and nothing else's.
+    """
+
+
 UNWRAPPED_ACTION = re.compile(r'\{\s*"action"\s*:\s*"')
 
 
@@ -54,7 +62,7 @@ def parse_action(reply: str) -> tuple[str, dict | None]:
     blocks = list(re.finditer(r"<team-action>(.*?)</team-action>", reply, re.DOTALL))
     if not blocks:
         if ACTION_START in reply:
-            raise ValueError("Incomplete team-action block")
+            raise InvalidAction("Incomplete team-action block")
         return reply, None
     # The last block is the action, so anything after it cannot change what was meant.
     # Members routinely sign off with a closing sentence, and refusing the turn for that
@@ -62,7 +70,7 @@ def parse_action(reply: str) -> tuple[str, dict | None]:
     block = blocks[-1]
     action = json.loads(block.group(1))
     if not isinstance(action, dict) or not isinstance(action.get("action"), str):
-        raise ValueError("team-action must be a JSON object with an action string")
+        raise InvalidAction("team-action must be a JSON object with an action string")
     return visible_text(reply), action
 
 
@@ -298,7 +306,12 @@ class Workflow:
     def apply(self, speaker: str, action: dict | None) -> str:
         """Malformed or stale actions never partly change state."""
         candidate = self.clone()
-        note = candidate._apply(speaker, action)
+        try:
+            note = candidate._apply(speaker, action)
+        except InvalidAction:
+            raise
+        except ValueError as exc:
+            raise InvalidAction(str(exc)) from exc
         self.data = candidate.data
         return note
 

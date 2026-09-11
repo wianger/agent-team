@@ -261,11 +261,21 @@ class SessionEngineTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.room.control("next", "a")
         await self.idle()
-        self.assertEqual(self.room.reason, "error")
+        # A first malformed action is the author's to correct, not the run's to die on.
+        self.assertNotEqual(self.room.reason, "error")
+        self.assertEqual(self.room.protocol_lapses.get("a"), 1)
+        self.assertTrue(
+            any("was not accepted" in m["text"] for m in self.room.messages),
+            "the member must be told what to send instead",
+        )
+        # What matters regardless of policy: nothing was recorded or acknowledged.
         self.assertIsNotNone(self.store.sessions()["a"]["session_id"])
         self.assertEqual(self.store.sessions()["a"]["synced_through"], 0)
         self.assertTrue(self.store.sessions()["a"]["dirty"])
-        self.assertFalse(any(m["role"] == "member" for m in self.room.messages))
+        # a's rejected turn commits nothing; the room stays alive and peers carry on.
+        self.assertFalse(
+            any(m["role"] == "member" and m["speaker"] == "a" for m in self.room.messages)
+        )
 
     async def test_peer_session_id_collision_is_rejected(self):
         await self.step("a")

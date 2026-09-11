@@ -563,3 +563,25 @@ class ChatRoomTests(unittest.IsolatedAsyncioTestCase):
         room.note_protocol_lapse("a", "fine by me", {"action": "approve", "version": 1})
         self.assertNotIn("a", room.protocol_lapses)
         await room.close()
+
+    async def test_a_malformed_action_is_corrected_once_then_escalates(self):
+        """Three live runs died on one bad field — a trailing remark, an empty evidence
+        string, an unterminated block — each the author's to fix, each ending the run.
+        The end-to-end path is covered by test_sessions; this pins the policy."""
+        room = self.start({"a": Scripted("[[PASS]]"), "b": Scripted("[[PASS]]")})
+
+        self.assertFalse(room.note_invalid_action("a", "evidence must be nonempty text"))
+        self.assertEqual(room.protocol_lapses["a"], 1)
+        self.assertTrue(
+            any("was not accepted" in m["text"] for m in room.messages),
+            "the author must be told what to send instead",
+        )
+        self.assertNotEqual(room.reason, "error")
+
+        # A member that cannot produce a valid action is not a slip to forgive forever.
+        self.assertTrue(room.note_invalid_action("a", "evidence must be nonempty text"))
+
+        # A valid action clears the count, so occasional slips never accumulate.
+        room.note_protocol_lapse("a", "fine", {"action": "approve", "version": 1})
+        self.assertNotIn("a", room.protocol_lapses)
+        await room.close()

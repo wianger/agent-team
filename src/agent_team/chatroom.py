@@ -13,7 +13,7 @@ from .adapters import AdapterError, QuotaExceeded, SessionUnavailable
 from .context import PASS, build_prompt
 from .engine import QUOTA_PROBE_PROMPT, Room
 from .resident import make_resident
-from .workflow import Workflow, parse_action
+from .workflow import InvalidAction, Workflow, parse_action
 
 
 @dataclass
@@ -399,6 +399,21 @@ class ChatRoom(Room):
                     self.manual_paused, self.reason = True, "step_complete"
             except asyncio.CancelledError:
                 pass
+            except InvalidAction as exc:
+                # The author can fix this; ending the run over it discards the whole room.
+                if not self.closed and turn.fence[0] == self.revision:
+                    outcome = "failed"
+                    if self.note_invalid_action(name, str(exc)):
+                        member.error = str(exc)
+                        self.manual_paused, self.reason = True, "error"
+                        self.single_step, self.next_target = False, None
+                        self.cancel_active(exclude=turn.turn_id)
+                        self.emit("error", speaker=name, turn_id=turn.turn_id, text=member.error)
+                        self.publish_system(
+                            f"{name} sent actions that could not be accepted twice in a row "
+                            f"({member.error}). The team is paused; steer with /revise or use a "
+                            "backend that honours the protocol."
+                        )
             except Exception as exc:
                 if not self.closed and (
                     turn.fence[0] == self.revision or isinstance(exc, QuotaExceeded)
