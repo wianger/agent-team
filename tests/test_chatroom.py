@@ -10,9 +10,9 @@ from pathlib import Path
 
 from agent_team.adapters import AdapterError, MockAdapter
 from agent_team.chatroom import ChatRoom
-from agent_team.engine import PROTOCOL_LAPSE_LIMIT
 from agent_team.config import AgentConfig, TeamConfig, demo_config
 from agent_team.context import DELTA_MARKER, PASS, TRANSCRIPT_MARKER
+from agent_team.engine import PROTOCOL_LAPSE_LIMIT
 from agent_team.store import Store
 from agent_team.workflow import action_reply, parse_action
 
